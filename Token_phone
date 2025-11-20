@@ -1,0 +1,184 @@
+USE TokenizationDB;
+GO
+
+-- 1. Drop the old uniqueness on TokenValue
+IF EXISTS (
+    SELECT 1
+    FROM sys.indexes
+    WHERE name = 'UQ_Token_Per_Column'
+      AND object_id = OBJECT_ID('dbo.Token_Map')
+)
+BEGIN
+    ALTER TABLE dbo.Token_Map
+    DROP CONSTRAINT UQ_Token_Per_Column;
+END
+GO
+
+-- 2. Enforce uniqueness per ORIGINAL value instead
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.indexes
+    WHERE name = 'UX_TokenMap_OrigVal'
+      AND object_id = OBJECT_ID('dbo.Token_Map')
+)
+BEGIN
+    CREATE UNIQUE INDEX UX_TokenMap_OrigVal
+    ON dbo.Token_Map(TableSchema, TableName, ColumnName, TokenType, OriginalValue);
+END
+GO
+
+
+
+
+
+----------------------------Update usp_GenerateStringToken  ------------------------------------------------------
+
+USE TokenizationDB;
+GO
+
+IF OBJECT_ID('dbo.usp_GenerateStringToken', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.usp_GenerateStringToken;
+GO
+
+CREATE PROCEDURE dbo.usp_GenerateStringToken
+    @TableSchema     SYSNAME,
+    @TableName       SYSNAME,
+    @ColumnName      SYSNAME,
+    @TokenType       VARCHAR(50),
+    @OriginalValue   NVARCHAR(400),
+    @MaxTokenLength  INT,
+    @TokenValue      NVARCHAR(100) OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF @OriginalValue IS NULL
+    BEGIN
+        SET @TokenValue = NULL;
+        RETURN;
+    END;
+
+    IF @MaxTokenLength IS NULL OR @MaxTokenLength <= 0
+    BEGIN
+        RAISERROR('usp_GenerateStringToken: MaxTokenLength must be > 0.',16,1);
+        RETURN;
+    END;
+
+    -------------------------------------------------
+    -- 1) Reuse existing mapping if it already exists
+    -------------------------------------------------
+    SELECT @TokenValue = TokenValue
+    FROM dbo.Token_Map
+    WHERE TableSchema   = @TableSchema
+      AND TableName     = @TableName
+      AND ColumnName    = @ColumnName
+      AND TokenType     = @TokenType
+      AND OriginalValue = @OriginalValue;
+
+    IF @TokenValue IS NOT NULL
+        RETURN;    -- mapping already exists, nothing more to do
+
+    -------------------------------------------------
+    -- 2) Generate one new format-preserving token
+    -------------------------------------------------
+    DECLARE 
+        @NewToken NVARCHAR(100),
+        @Len      INT,
+        @i        INT,
+        @ch       NCHAR(1),
+        @code     INT,
+        @r        INT;
+
+    SET @Len = LEN(@OriginalValue);
+    IF @Len > @MaxTokenLength SET @Len = @MaxTokenLength;
+
+    SET @NewToken = N'';
+    SET @i = 1;
+
+    WHILE @i <= @Len
+    BEGIN
+        SET @ch   = SUBSTRING(@OriginalValue, @i, 1);
+        SET @code = UNICODE(@ch);
+
+        -- digits 0–9
+        IF @code BETWEEN 48 AND 57
+        BEGIN
+            SET @r = ABS(CHECKSUM(NEWID())) % 10;
+            SET @NewToken += NCHAR(48 + @r);
+        END
+        -- uppercase A–Z
+        ELSE IF @code BETWEEN 65 AND 90
+        BEGIN
+            SET @r = ABS(CHECKSUM(NEWID())) % 26;
+            SET @NewToken += NCHAR(65 + @r);
+        END
+        -- lowercase a–z
+        ELSE IF @code BETWEEN 97 AND 122
+        BEGIN
+            SET @r = ABS(CHECKSUM(NEWID())) % 26;
+            SET @NewToken += NCHAR(97 + @r);
+        END
+        -- keep punctuation / spaces
+        ELSE
+        BEGIN
+            SET @NewToken += @ch;
+        END;
+
+        SET @i += 1;
+    END;
+
+    -- 3) Store mapping (unique by OriginalValue)
+    INSERT INTO dbo.Token_Map
+        (TableSchema, TableName, ColumnName, TokenType, TokenValue, OriginalValue)
+    VALUES
+        (@TableSchema, @TableName, @ColumnName, @TokenType, @NewToken, @OriginalValue);
+
+    SET @TokenValue = @NewToken;
+END;
+GO
+
+
+------What is happening.
+With 10,000+ rows and a limited pattern (e.g., short phone field, a lot of similar values), you eventually run out of new tokens or keep colliding → 100 attempts → error.
+
+
+FORMAT-PRESERVING tokenization does NOT work for datetime
+
+“conversion failed when converting date/time from character string”
+
+🔧 Available solutions
+
+I can implement any of these, depending on the requirement:
+
+Option A — Convert DOB to nvarchar and tokenize like a string
+
+(Easiest but changes data type)
+
+Option B — Generate valid fake DOBs
+
+Example: keep same year ± random offset
+or keep age group
+or entirely new random but valid dates.
+
+Option C — Remove DOB from tokenization
+
+(You already chose this for POC)
+
+Option D — Build a special DOB-token generator
+
+That outputs valid datetime tokens.
+
+If you want, I can write a DOB masking function that:
+
+keeps it a valid datetime
+
+avoids duplicates
+
+preserves age group
+
+or keeps year only
+
+Just tell me what business rule you want for DOB.
+
+
+
