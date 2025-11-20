@@ -810,4 +810,104 @@ EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'Phone',         'PHONE',
 EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'Manager_Email', 'EMAIL', 'Employee ID';
 
 
++++++++++revarse Token.----------
+How it work.
+UPDATE real_table
+SET ColumnName = Token_Map.OriginalValue
+JOIN Token_Map
+     ON TokenValue = masked_value
+    AND TableSchema/TableName/ColumnName/TokenType match
+
+T-----------------token reversal for B_iam.srcAya
+USE Masking;
+GO
+
+-- SSN
+EXEC dbo.usp_DeTokenizeColumn 
+        @SchemaName = 'B_iam',
+        @TableName  = 'srcAya',
+        @ColumnName = 'SSN',
+        @TokenType  = 'SSN';
+
+-- First name
+EXEC dbo.usp_DeTokenizeColumn 
+        'B_iam', 'srcAya', 'FirstName', 'NAME';
+
+-- Last name
+EXEC dbo.usp_DeTokenizeColumn 
+        'B_iam', 'srcAya', 'LastName', 'NAME';
+
+-- Home address
+EXEC dbo.usp_DeTokenizeColumn 
+        'B_iam', 'srcAya', 'Home Address', 'ADDRESS';
+
+-- Zip code
+EXEC dbo.usp_DeTokenizeColumn 
+        'B_iam', 'srcAya', 'Zip', 'ZIP';
+
+-- Email
+EXEC dbo.usp_DeTokenizeColumn 
+        'B_iam', 'srcAya', 'Email', 'EMAIL';
+
+-- Phone
+EXEC dbo.usp_DeTokenizeColumn 
+        'B_iam', 'srcAya', 'Phone', 'PHONE';
+
+-- Manager email
+EXEC dbo.usp_DeTokenizeColumn 
+        'B_iam', 'srcAya', 'Manager_Email', 'EMAIL';
+
+
+-----------------Token for 'B_five9  ACD_Report'-----------------------
+
+USE Masking;
+GO
+
+-- example: using CallId as the key column
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'CallSurveyResult',         'CALLMETA', 'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'CallType',                'CALLMETA', 'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'Calls',                   'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'Campaign',                'CAMPAIGN', 'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'CampaignType',            'CAMPAIGN', 'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'MediaType',               'MEDIATYPE','CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'VisualIvr',               'IVR',      'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'VoiceIvr',                'IVR',      'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'AfterCallWorkTime',       'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'ConferenceTime',          'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'Conferences',             'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'ConsultTime',             'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'Consults',                'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'ConsultsAnswered',        'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'HandleTime',              'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'HoldTime',                'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'Holds',                   'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'IvrTime',                 'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'ParkTime',                'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'Parks',                   'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'RingTime',                'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'TalkTime',                'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'TalkTimeLessHoldAndPark', 'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'Transfers',               'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'Voicemails',              'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'VoicemailsDeclined',      'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'VoicemailsDeleted',       'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'VoicemailsHandled',       'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'VoicemailsReturnedCall',  'METRIC',   'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'VoicemailsTransferred',   'METRIC',   'CallId';
+
+-- Agent identity
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'Agent',          'NAME',  'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'AgentEmail',     'EMAIL', 'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'AgentFirstName', 'NAME',  'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'AgentGroup',     'NAME',  'CallId';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_five9', 'ACD_Report', 'AgentLastName',  'NAME',  'CallId';
+
+reverse------------Reversal doesn’t care which key column you used. It just uses
+
+EXEC dbo.usp_DeTokenizeColumn 'B_five9', 'ACD_Report', 'AgentEmail',     'EMAIL';
+EXEC dbo.usp_DeTokenizeColumn 'B_five9', 'ACD_Report', 'AgentFirstName', 'NAME';
+EXEC dbo.usp_DeTokenizeColumn 'B_five9', 'ACD_Report', 'AgentLastName',  'NAME';
+-- etc. for any column you want to restore
+
+
 
