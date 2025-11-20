@@ -1,0 +1,673 @@
+
+IF DB_ID('TokenizationDB') IS NULL
+    CREATE DATABASE TokenizationDB;
+GO
+
+USE TokenizationDB;
+GO
+
+CREATE TABLE dbo.Token_Map
+(
+    TokenMapID    BIGINT IDENTITY(1,1) PRIMARY KEY,
+    TableSchema   SYSNAME        NOT NULL,
+    TableName     SYSNAME        NOT NULL,
+    ColumnName    SYSNAME        NOT NULL,
+    TokenType     VARCHAR(50)    NOT NULL,   -- 'SSN','EMAIL','NAME','PHONE',...
+    TokenValue    NVARCHAR(100)  NOT NULL,   -- value AFTER masking
+    OriginalValue NVARCHAR(400)  NOT NULL,   -- original PII
+    CreatedAt     DATETIME2(3)   NOT NULL DEFAULT SYSUTCDATETIME(),
+
+    CONSTRAINT UQ_Token_Per_Column UNIQUE (TableSchema, TableName, ColumnName, TokenValue)
+);
+GO
+
+
+---STEP 2 – Format-preserving string token generator
+
+USE TokenizationDB;
+GO
+
+IF OBJECT_ID('dbo.usp_GenerateStringToken', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.usp_GenerateStringToken;
+GO
+
+CREATE PROCEDURE dbo.usp_GenerateStringToken
+    @TableSchema     SYSNAME,
+    @TableName       SYSNAME,
+    @ColumnName      SYSNAME,
+    @TokenType       VARCHAR(50),
+    @OriginalValue   NVARCHAR(400),
+    @MaxTokenLength  INT,
+    @TokenValue      NVARCHAR(100) OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF @OriginalValue IS NULL
+    BEGIN
+        SET @TokenValue = NULL;
+        RETURN;
+    END;
+
+    IF @MaxTokenLength IS NULL OR @MaxTokenLength <= 0
+    BEGIN
+        RAISERROR('usp_GenerateStringToken: MaxTokenLength must be > 0.',16,1);
+        RETURN;
+    END;
+
+    DECLARE 
+        @NewToken NVARCHAR(100),
+        @Len      INT,
+        @i        INT,
+        @ch       NCHAR(1),
+        @code     INT,
+        @r        INT,
+        @tries    INT;
+
+    SET @tries = 0;
+
+    WHILE 1 = 1
+    BEGIN
+        SET @tries = @tries + 1;
+        IF @tries > 100
+        BEGIN
+            RAISERROR('usp_GenerateStringToken: too many attempts to generate unique token.',16,1);
+            RETURN;
+        END;
+
+        SET @Len = LEN(@OriginalValue);
+        IF @Len > @MaxTokenLength SET @Len = @MaxTokenLength;
+
+        SET @NewToken = N'';
+        SET @i = 1;
+
+        WHILE @i <= @Len
+        BEGIN
+            SET @ch   = SUBSTRING(@OriginalValue, @i, 1);
+            SET @code = UNICODE(@ch);
+
+            -- digit 0–9
+            IF @code BETWEEN 48 AND 57
+            BEGIN
+                SET @r = ABS(CHECKSUM(NEWID())) % 10;
+                SET @NewToken += NCHAR(48 + @r);
+            END
+            -- uppercase A–Z
+            ELSE IF @code BETWEEN 65 AND 90
+            BEGIN
+                SET @r = ABS(CHECKSUM(NEWID())) % 26;
+                SET @NewToken += NCHAR(65 + @r);
+            END
+            -- lowercase a–z
+            ELSE IF @code BETWEEN 97 AND 122
+            BEGIN
+                SET @r = ABS(CHECKSUM(NEWID())) % 26;
+                SET @NewToken += NCHAR(97 + @r);
+            END
+            -- keep punctuation, @, ., -, spaces, etc.
+            ELSE
+            BEGIN
+                SET @NewToken += @ch;
+            END;
+
+            SET @i += 1;
+        END;
+
+        -- ensure token is not already used in this column
+        IF NOT EXISTS
+        (
+            SELECT 1
+            FROM dbo.Token_Map
+            WHERE TableSchema = @TableSchema
+              AND TableName   = @TableName
+              AND ColumnName  = @ColumnName
+              AND TokenType   = @TokenType
+              AND TokenValue  = @NewToken
+        )
+        BEGIN
+            INSERT INTO dbo.Token_Map
+                (TableSchema, TableName, ColumnName, TokenType, TokenValue, OriginalValue)
+            VALUES
+                (@TableSchema, @TableName, @ColumnName, @TokenType, @NewToken, @OriginalValue);
+
+            SET @TokenValue = @NewToken;
+            BREAK;
+        END;
+
+        -- else: loop again and generate another random token
+    END;
+END;
+GO
+
+----STEP 3 – In Masking: row-wise tokenization for character columns
+
+USE Masking;
+GO
+
+IF OBJECT_ID('dbo.usp_TokenizeColumn_RowWise', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.usp_TokenizeColumn_RowWise;
+GO
+
+CREATE PROCEDURE dbo.usp_TokenizeColumn_RowWise
+    @SchemaName SYSNAME,
+    @TableName  SYSNAME,
+    @ColumnName SYSNAME,
+    @TokenType  VARCHAR(50)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE 
+        @sql      NVARCHAR(MAX),
+        @MaxLen   INT,
+        @DataType SYSNAME;
+
+    -------------------------------------------------
+    -- 1) Get datatype and max length
+    -------------------------------------------------
+    SELECT 
+        @DataType = t.name,
+        @MaxLen   = CASE 
+                        WHEN t.name IN ('nvarchar','nchar')
+                             THEN c.max_length / 2
+                        ELSE c.max_length
+                    END
+    FROM sys.columns c
+    JOIN sys.types   t ON c.user_type_id = t.user_type_id
+    JOIN sys.objects o ON c.object_id    = o.object_id
+    WHERE o.name = @TableName
+      AND SCHEMA_NAME(o.schema_id) = @SchemaName
+      AND c.name = @ColumnName;
+
+    IF @MaxLen IS NULL
+    BEGIN
+        RAISERROR('usp_TokenizeColumn_RowWise: column not found.',16,1);
+        RETURN;
+    END;
+
+    IF @DataType NOT IN ('char','nchar','varchar','nvarchar')
+    BEGIN
+        RAISERROR('usp_TokenizeColumn_RowWise: only char/varchar/nchar/nvarchar supported.',16,1);
+        RETURN;
+    END;
+
+    -------------------------------------------------
+    -- 2) Temp table with ID + original value
+    -------------------------------------------------
+    IF OBJECT_ID('tempdb..#RowsToTokenize') IS NOT NULL
+        DROP TABLE #RowsToTokenize;
+
+    CREATE TABLE #RowsToTokenize
+    (
+        RowID INT          NOT NULL,
+        Value NVARCHAR(400) NOT NULL
+    );
+
+    SET @sql = N'
+        INSERT INTO #RowsToTokenize (RowID, Value)
+        SELECT ID,
+               CAST(' + QUOTENAME(@ColumnName) + N' AS NVARCHAR(400))
+        FROM ' + QUOTENAME(@SchemaName) + N'.' + QUOTENAME(@TableName) + N'
+        WHERE ' + QUOTENAME(@ColumnName) + N' IS NOT NULL;
+    ';
+
+    EXEC sp_executesql @sql;
+
+    -------------------------------------------------
+    -- 3) Loop rows and tokenize
+    -------------------------------------------------
+    DECLARE 
+        @RowID         INT,
+        @OriginalValue NVARCHAR(400),
+        @TokenValue    NVARCHAR(100);
+
+    DECLARE cur CURSOR FAST_FORWARD FOR
+        SELECT RowID, Value FROM #RowsToTokenize;
+
+    OPEN cur;
+    FETCH NEXT FROM cur INTO @RowID, @OriginalValue;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        EXEC TokenizationDB.dbo.usp_GenerateStringToken
+            @TableSchema    = @SchemaName,
+            @TableName      = @TableName,
+            @ColumnName     = @ColumnName,
+            @TokenType      = @TokenType,
+            @OriginalValue  = @OriginalValue,
+            @MaxTokenLength = @MaxLen,
+            @TokenValue     = @TokenValue OUTPUT;
+
+        SET @sql = N'
+            UPDATE t
+            SET ' + QUOTENAME(@ColumnName) + N' = @TokenValue
+            FROM ' + QUOTENAME(@SchemaName) + N'.' + QUOTENAME(@TableName) + N' t
+            WHERE t.ID = @RowID;
+        ';
+
+        EXEC sp_executesql
+            @sql,
+            N'@TokenValue NVARCHAR(100), @RowID INT',
+            @TokenValue = @TokenValue,
+            @RowID      = @RowID;
+
+        FETCH NEXT FROM cur INTO @RowID, @OriginalValue;
+    END;
+
+    CLOSE cur;
+    DEALLOCATE cur;
+
+    DROP TABLE #RowsToTokenize;
+END;
+GO
+
+
+---STEP 4 – De-tokenize (reverse) string columns
+USE Masking;
+GO
+
+IF OBJECT_ID('dbo.usp_DeTokenizeColumn', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.usp_DeTokenizeColumn;
+GO
+
+CREATE PROCEDURE dbo.usp_DeTokenizeColumn
+    @SchemaName SYSNAME,
+    @TableName  SYSNAME,
+    @ColumnName SYSNAME,
+    @TokenType  VARCHAR(50)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @sql NVARCHAR(MAX);
+
+    SET @sql = N'
+        UPDATE t
+        SET ' + QUOTENAME(@ColumnName) + N' = m.OriginalValue
+        FROM ' + QUOTENAME(@SchemaName) + N'.' + QUOTENAME(@TableName) + N' t
+        JOIN TokenizationDB.dbo.Token_Map m
+          ON m.TableSchema = @SchemaParam
+         AND m.TableName   = @TableParam
+         AND m.ColumnName  = @ColumnParam
+         AND m.TokenType   = @TokenType
+         AND m.TokenValue  = t.' + QUOTENAME(@ColumnName) + N';
+    ';
+
+    EXEC sp_executesql
+        @sql,
+        N'@SchemaParam SYSNAME, @TableParam SYSNAME, @ColumnParam SYSNAME, @TokenType VARCHAR(50)',
+        @SchemaParam = @SchemaName,
+        @TableParam  = @TableName,
+        @ColumnParam = @ColumnName,
+        @TokenType   = @TokenType;
+END;
+GO
+
+--STEP 5 – Tokenize the 4 tables (all PII except DOB)
+--5.1 B_iam.srcAya
+USE Masking;
+GO
+
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'SSN',           'SSN';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'FirstName',     'NAME';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'LastName',      'NAME';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'Home Address',  'ADDRESS';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'Zip',           'ZIP';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'Email',         'EMAIL';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'Phone',         'PHONE';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'Manager_Email', 'EMAIL';
+-- Process_Level is usually not PII; you probably don't need to tokenize it.
+
+--5.2 B_iam.srcLawson
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcLawson', 'FULL_NAME',     'NAME';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcLawson', 'ZIP',           'ZIP';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcLawson', 'HOME_ZIP',      'ZIP';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcLawson', 'EMAIL_ADDRESS', 'EMAIL';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcLawson', 'MANAGER_EMAIL', 'EMAIL';
+-- DOB skipped on purpose
+
+
+--5.3 B_iam.srcSymplr
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcLawson', 'FULL_NAME',     'NAME';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcLawson', 'ZIP',           'ZIP';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcLawson', 'HOME_ZIP',      'ZIP';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcLawson', 'EMAIL_ADDRESS', 'EMAIL';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcLawson', 'MANAGER_EMAIL', 'EMAIL';
+-- DOB skipped on purpose
+
+--5.4 B_icims.Icims
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_icims', 'Icims', 'Hiring_Manager_Primary_Email',           'EMAIL';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_icims', 'Icims', 'Recruiter_Primary_Email',                'EMAIL';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_icims', 'Icims', 'Secondary_Hiring_Manager_Primary_Email', 'EMAIL';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_icims', 'Icims', 'Preboarder_Primary_Email',               'EMAIL';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_icims', 'Icims', 'Secondary_Recruiter_Primary_Email',      'EMAIL';
+-- Department / approval counts usually are not PII, so you can leave them as-is.
+
+SELECT * FROM B_iam.srcSymplr;
+
+
+
+USE Masking;
+GO
+
+SELECT TOP 10 *
+FROM B_iam.srcSymplr;
+
+-- Also: do we already have any token mappings for this table?
+SELECT TOP 20 *
+FROM TokenizationDB.dbo.Token_Map
+WHERE TableSchema = 'B_iam'
+  AND TableName   = 'srcSymplr';
+
+
+
+  USE Masking;
+GO
+
+------------------------------------------------------------------------------
+-- 1. Reverse B_iam.srcAya
+------------------------------------------------------------------------------
+
+UPDATE aya
+SET aya.SSN            = m1.OriginalValue
+FROM B_iam.srcAya aya
+JOIN TokenizationDB.dbo.Token_Map m1
+     ON m1.TableSchema = 'B_iam'
+    AND m1.TableName   = 'srcAya'
+    AND m1.ColumnName  = 'SSN'
+    AND m1.TokenType   = 'SSN'
+    AND m1.TokenValue  = aya.SSN;
+
+UPDATE aya
+SET aya.FirstName      = m2.OriginalValue
+FROM B_iam.srcAya aya
+JOIN TokenizationDB.dbo.Token_Map m2
+     ON m2.TableSchema = 'B_iam'
+    AND m2.TableName   = 'srcAya'
+    AND m2.ColumnName  = 'FirstName'
+    AND m2.TokenType   = 'NAME'
+    AND m2.TokenValue  = aya.FirstName;
+
+UPDATE aya
+SET aya.LastName       = m3.OriginalValue
+FROM B_iam.srcAya aya
+JOIN TokenizationDB.dbo.Token_Map m3
+     ON m3.TableSchema = 'B_iam'
+    AND m3.TableName   = 'srcAya'
+    AND m3.ColumnName  = 'LastName'
+    AND m3.TokenType   = 'NAME'
+    AND m3.TokenValue  = aya.LastName;
+
+UPDATE aya
+SET aya.[Home Address] = m4.OriginalValue
+FROM B_iam.srcAya aya
+JOIN TokenizationDB.dbo.Token_Map m4
+     ON m4.TableSchema = 'B_iam'
+    AND m4.TableName   = 'srcAya'
+    AND m4.ColumnName  = 'Home Address'
+    AND m4.TokenType   = 'ADDRESS'
+    AND m4.TokenValue  = aya.[Home Address];
+
+UPDATE aya
+SET aya.Zip            = m5.OriginalValue
+FROM B_iam.srcAya aya
+JOIN TokenizationDB.dbo.Token_Map m5
+     ON m5.TableSchema = 'B_iam'
+    AND m5.TableName   = 'srcAya'
+    AND m5.ColumnName  = 'Zip'
+    AND m5.TokenType   = 'ZIP'
+    AND m5.TokenValue  = aya.Zip;
+
+UPDATE aya
+SET aya.Email          = m6.OriginalValue
+FROM B_iam.srcAya aya
+JOIN TokenizationDB.dbo.Token_Map m6
+     ON m6.TableSchema = 'B_iam'
+    AND m6.TableName   = 'srcAya'
+    AND m6.ColumnName  = 'Email'
+    AND m6.TokenType   = 'EMAIL'
+    AND m6.TokenValue  = aya.Email;
+
+UPDATE aya
+SET aya.Phone          = m7.OriginalValue
+FROM B_iam.srcAya aya
+JOIN TokenizationDB.dbo.Token_Map m7
+     ON m7.TableSchema = 'B_iam'
+    AND m7.TableName   = 'srcAya'
+    AND m7.ColumnName  = 'Phone'
+    AND m7.TokenType   = 'PHONE'
+    AND m7.TokenValue  = aya.Phone;
+
+UPDATE aya
+SET aya.Manager_Email  = m8.OriginalValue
+FROM B_iam.srcAya aya
+JOIN TokenizationDB.dbo.Token_Map m8
+     ON m8.TableSchema = 'B_iam'
+    AND m8.TableName   = 'srcAya'
+    AND m8.ColumnName  = 'Manager_Email'
+    AND m8.TokenType   = 'EMAIL'
+    AND m8.TokenValue  = aya.Manager_Email;
+
+
+
+------------------------------------------------------------------------------
+-- 2. Reverse B_iam.srcLawson
+------------------------------------------------------------------------------
+
+UPDATE l
+SET l.FULL_NAME       = m1.OriginalValue
+FROM B_iam.srcLawson l
+JOIN TokenizationDB.dbo.Token_Map m1
+     ON m1.TableSchema = 'B_iam'
+    AND m1.TableName   = 'srcLawson'
+    AND m1.ColumnName  = 'FULL_NAME'
+    AND m1.TokenType   = 'NAME'
+    AND m1.TokenValue  = l.FULL_NAME;
+
+UPDATE l
+SET l.ZIP             = m2.OriginalValue
+FROM B_iam.srcLawson l
+JOIN TokenizationDB.dbo.Token_Map m2
+     ON m2.TableSchema = 'B_iam'
+    AND m2.TableName   = 'srcLawson'
+    AND m2.ColumnName  = 'ZIP'
+    AND m2.TokenType   = 'ZIP'
+    AND m2.TokenValue  = l.ZIP;
+
+UPDATE l
+SET l.HOME_ZIP        = m3.OriginalValue
+FROM B_iam.srcLawson l
+JOIN TokenizationDB.dbo.Token_Map m3
+     ON m3.TableSchema = 'B_iam'
+    AND m3.TableName   = 'srcLawson'
+    AND m3.ColumnName  = 'HOME_ZIP'
+    AND m3.TokenType   = 'ZIP'
+    AND m3.TokenValue  = l.HOME_ZIP;
+
+UPDATE l
+SET l.EMAIL_ADDRESS   = m4.OriginalValue
+FROM B_iam.srcLawson l
+JOIN TokenizationDB.dbo.Token_Map m4
+     ON m4.TableSchema = 'B_iam'
+    AND m4.TableName   = 'srcLawson'
+    AND m4.ColumnName  = 'EMAIL_ADDRESS'
+    AND m4.TokenType   = 'EMAIL'
+    AND m4.TokenValue  = l.EMAIL_ADDRESS;
+
+UPDATE l
+SET l.MANAGER_EMAIL   = m5.OriginalValue
+FROM B_iam.srcLawson l
+JOIN TokenizationDB.dbo.Token_Map m5
+     ON m5.TableSchema = 'B_iam'
+    AND m5.TableName   = 'srcLawson'
+    AND m5.ColumnName  = 'MANAGER_EMAIL'
+    AND m5.TokenType   = 'EMAIL'
+    AND m5.TokenValue  = l.MANAGER_EMAIL;
+
+
+------------------------------------------------------------------------------
+-- 3. Reverse B_iam.srcSymplr
+------------------------------------------------------------------------------
+
+UPDATE s
+SET s.SSN = m1.OriginalValue
+FROM B_iam.srcSymplr s
+JOIN TokenizationDB.dbo.Token_Map m1
+     ON m1.TableSchema = 'B_iam'
+    AND m1.TableName   = 'srcSymplr'
+    AND m1.ColumnName  = 'SSN'
+    AND m1.TokenType   = 'SSN'
+    AND m1.TokenValue  = s.SSN;
+
+UPDATE s
+SET s.Primary_Practice_AddressLine1 = m2.OriginalValue
+FROM B_iam.srcSymplr s
+JOIN TokenizationDB.dbo.Token_Map m2
+     ON m2.TableSchema = 'B_iam'
+    AND m2.TableName   = 'srcSymplr'
+    AND m2.ColumnName  = 'Primary_Practice_AddressLine1'
+    AND m2.TokenType   = 'ADDRESS'
+    AND m2.TokenValue  = s.Primary_Practice_AddressLine1;
+
+UPDATE s
+SET s.Primary_Practice_AddressLine2 = m3.OriginalValue
+FROM B_iam.srcSymplr s
+JOIN TokenizationDB.dbo.Token_Map m3
+     ON m3.TableSchema = 'B_iam'
+    AND m3.TableName   = 'srcSymplr'
+    AND m3.ColumnName  = 'Primary_Practice_AddressLine2'
+    AND m3.TokenType   = 'ADDRESS'
+    AND m3.TokenValue  = s.Primary_Practice_AddressLine2;
+
+UPDATE s
+SET s.Primary_Practice_ZipCode = m4.OriginalValue
+FROM B_iam.srcSymplr s
+JOIN TokenizationDB.dbo.Token_Map m4
+     ON m4.TableSchema = 'B_iam'
+    AND m4.TableName   = 'srcSymplr'
+    AND m4.ColumnName  = 'Primary_Practice_ZipCode'
+    AND m4.TokenType   = 'ZIP'
+    AND m4.TokenValue  = s.Primary_Practice_ZipCode;
+
+UPDATE s
+SET s.Primary_Practice_Phone = m5.OriginalValue
+FROM B_iam.srcSymplr s
+JOIN TokenizationDB.dbo.Token_Map m5
+     ON m5.TableSchema = 'B_iam'
+    AND m5.TableName   = 'srcSymplr'
+    AND m5.ColumnName  = 'Primary_Practice_Phone'
+    AND m5.TokenType   = 'PHONE'
+    AND m5.TokenValue  = s.Primary_Practice_Phone;
+
+UPDATE s
+SET s.Cell_Phone = m6.OriginalValue
+FROM B_iam.srcSymplr s
+JOIN TokenizationDB.dbo.Token_Map m6
+     ON m6.TableSchema = 'B_iam'
+    AND m6.TableName   = 'srcSymplr'
+    AND m6.ColumnName  = 'Cell_Phone'
+    AND m6.TokenType   = 'PHONE'
+    AND m6.TokenValue  = s.Cell_Phone;
+
+UPDATE s
+SET s.Primary_Practice_Email = m7.OriginalValue
+FROM B_iam.srcSymplr s
+JOIN TokenizationDB.dbo.Token_Map m7
+     ON m7.TableSchema = 'B_iam'
+    AND m7.TableName   = 'srcSymplr'
+    AND m7.ColumnName  = 'Primary_Practice_Email'
+    AND m7.TokenType   = 'EMAIL'
+    AND m7.TokenValue  = s.Primary_Practice_Email;
+
+UPDATE s
+SET s.State_License_Number = m8.OriginalValue
+FROM B_iam.srcSymplr s
+JOIN TokenizationDB.dbo.Token_Map m8
+     ON m8.TableSchema = 'B_iam'
+    AND m8.TableName   = 'srcSymplr'
+    AND m8.ColumnName  = 'State_License_Number'
+    AND m8.TokenType   = 'LICENSE'
+    AND m8.TokenValue  = s.State_License_Number;
+
+UPDATE s
+SET s.Medicare_Number = m9.OriginalValue
+FROM B_iam.srcSymplr s
+JOIN TokenizationDB.dbo.Token_Map m9
+     ON m9.TableSchema = 'B_iam'
+    AND m9.TableName   = 'srcSymplr'
+    AND m9.ColumnName  = 'Medicare_Number'
+    AND m9.TokenType   = 'MEDICARE'
+    AND m9.TokenValue  = s.Medicare_Number;
+
+UPDATE s
+SET s.Medicaid_Number = m10.OriginalValue
+FROM B_iam.srcSymplr s
+JOIN TokenizationDB.dbo.Token_Map m10
+     ON m10.TableSchema = 'B_iam'
+    AND m10.TableName   = 'srcSymplr'
+    AND m10.ColumnName  = 'Medicaid_Number'
+    AND m10.TokenType   = 'MEDICAID'
+    AND m10.TokenValue  = s.Medicaid_Number;
+
+
+
+------------------------------------------------------------------------------
+-- 4. Reverse B_icims.Icims
+------------------------------------------------------------------------------
+
+UPDATE i
+SET i.Hiring_Manager_Primary_Email = m1.OriginalValue
+FROM B_icims.Icims i
+JOIN TokenizationDB.dbo.Token_Map m1
+     ON m1.TableSchema = 'B_icims'
+    AND m1.TableName   = 'Icims'
+    AND m1.ColumnName  = 'Hiring_Manager_Primary_Email'
+    AND m1.TokenType   = 'EMAIL'
+    AND m1.TokenValue  = i.Hiring_Manager_Primary_Email;
+
+UPDATE i
+SET i.Recruiter_Primary_Email = m2.OriginalValue
+FROM B_icims.Icims i
+JOIN TokenizationDB.dbo.Token_Map m2
+     ON m2.TableSchema = 'B_icims'
+    AND m2.TableName   = 'Icims'
+    AND m2.ColumnName  = 'Recruiter_Primary_Email'
+    AND m2.TokenType   = 'EMAIL'
+    AND m2.TokenValue  = i.Recruiter_Primary_Email;
+
+UPDATE i
+SET i.Secondary_Hiring_Manager_Primary_Email = m3.OriginalValue
+FROM B_icims.Icims i
+JOIN TokenizationDB.dbo.Token_Map m3
+     ON m3.TableSchema = 'B_icims'
+    AND m3.TableName   = 'Icims'
+    AND m3.ColumnName  = 'Secondary_Hiring_Manager_Primary_Email'
+    AND m3.TokenType   = 'EMAIL'
+    AND m3.TokenValue  = i.Secondary_Hiring_Manager_Primary_Email;
+
+UPDATE i
+SET i.Preboarder_Primary_Email = m4.OriginalValue
+FROM B_icims.Icims i
+JOIN TokenizationDB.dbo.Token_Map m4
+     ON m4.TableSchema = 'B_icims'
+    AND m4.TableName   = 'Icims'
+    AND m4.ColumnName  = 'Preboarder_Primary_Email'
+    AND m4.TokenType   = 'EMAIL'
+    AND m4.TokenValue  = i.Preboarder_Primary_Email;
+
+UPDATE i
+SET i.Secondary_Recruiter_Primary_Email = m5.OriginalValue
+FROM B_icims.Icims i
+JOIN TokenizationDB.dbo.Token_Map m5
+     ON m5.TableSchema = 'B_icims'
+    AND m5.TableName   = 'Icims'
+    AND m5.ColumnName  = 'Secondary_Recruiter_Primary_Email'
+    AND m5.TokenType   = 'EMAIL'
+    AND m5.TokenValue  = i.Secondary_Recruiter_Primary_Email;
+
+
+------------------------------------------------------------------------------
+PRINT '✔ ALL TOKENIZED COLUMNS SUCCESSFULLY REVERSED.';
+------------------------------------------------------------------------------
+
+
