@@ -671,3 +671,143 @@ PRINT '✔ ALL TOKENIZED COLUMNS SUCCESSFULLY REVERSED.';
 ------------------------------------------------------------------------------
 
 
+
+
+
+
+--------------------******************************************-------------------------
+
+USE Masking;
+GO
+
+IF OBJECT_ID('dbo.usp_TokenizeColumn_RowWise', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.usp_TokenizeColumn_RowWise;
+GO
+
+CREATE PROCEDURE dbo.usp_TokenizeColumn_RowWise
+    @SchemaName   SYSNAME,
+    @TableName    SYSNAME,
+    @ColumnName   SYSNAME,
+    @TokenType    VARCHAR(50),
+    @KeyColumn    SYSNAME        -- NEW: name of PK/unique key column
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE 
+        @sql      NVARCHAR(MAX),
+        @MaxLen   INT,
+        @DataType SYSNAME;
+
+    -------------------------------------------------
+    -- 1) Get datatype and length of column to tokenize
+    -------------------------------------------------
+    SELECT 
+        @DataType = t.name,
+        @MaxLen   = CASE 
+                        WHEN t.name IN ('nvarchar','nchar')
+                             THEN c.max_length / 2
+                        ELSE c.max_length
+                    END
+    FROM sys.columns c
+    JOIN sys.types   t ON c.user_type_id = t.user_type_id
+    JOIN sys.objects o ON c.object_id    = o.object_id
+    WHERE o.name = @TableName
+      AND SCHEMA_NAME(o.schema_id) = @SchemaName
+      AND c.name = @ColumnName;
+
+    IF @MaxLen IS NULL
+    BEGIN
+        RAISERROR('usp_TokenizeColumn_RowWise: column not found.',16,1);
+        RETURN;
+    END;
+
+    IF @DataType NOT IN ('char','nchar','varchar','nvarchar')
+    BEGIN
+        RAISERROR('usp_TokenizeColumn_RowWise: only char/varchar/nchar/nvarchar supported.',16,1);
+        RETURN;
+    END;
+
+    -------------------------------------------------
+    -- 2) Temp table with *key value* + original value
+    -------------------------------------------------
+    IF OBJECT_ID('tempdb..#RowsToTokenize') IS NOT NULL
+        DROP TABLE #RowsToTokenize;
+
+    CREATE TABLE #RowsToTokenize
+    (
+        KeyValue NVARCHAR(400) NOT NULL,
+        Value    NVARCHAR(400) NOT NULL
+    );
+
+    SET @sql = N'
+        INSERT INTO #RowsToTokenize (KeyValue, Value)
+        SELECT CONVERT(NVARCHAR(400), ' + QUOTENAME(@KeyColumn) + N'),
+               CAST(' + QUOTENAME(@ColumnName) + N' AS NVARCHAR(400))
+        FROM ' + QUOTENAME(@SchemaName) + N'.' + QUOTENAME(@TableName) + N'
+        WHERE ' + QUOTENAME(@ColumnName) + N' IS NOT NULL;
+    ';
+
+    EXEC sp_executesql @sql;
+
+    -------------------------------------------------
+    -- 3) Loop rows and tokenize
+    -------------------------------------------------
+    DECLARE 
+        @KeyValue      NVARCHAR(400),
+        @OriginalValue NVARCHAR(400),
+        @TokenValue    NVARCHAR(100);
+
+    DECLARE cur CURSOR FAST_FORWARD FOR
+        SELECT KeyValue, Value FROM #RowsToTokenize;
+
+    OPEN cur;
+    FETCH NEXT FROM cur INTO @KeyValue, @OriginalValue;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        EXEC TokenizationDB.dbo.usp_GenerateStringToken
+            @TableSchema    = @SchemaName,
+            @TableName      = @TableName,
+            @ColumnName     = @ColumnName,
+            @TokenType      = @TokenType,
+            @OriginalValue  = @OriginalValue,
+            @MaxTokenLength = @MaxLen,
+            @TokenValue     = @TokenValue OUTPUT;
+
+        SET @sql = N'
+            UPDATE t
+            SET ' + QUOTENAME(@ColumnName) + N' = @TokenValue
+            FROM ' + QUOTENAME(@SchemaName) + N'.' + QUOTENAME(@TableName) + N' t
+            WHERE CONVERT(NVARCHAR(400), t.' + QUOTENAME(@KeyColumn) + N') = @KeyValue;
+        ';
+
+        EXEC sp_executesql
+            @sql,
+            N'@TokenValue NVARCHAR(100), @KeyValue NVARCHAR(400)',
+            @TokenValue = @TokenValue,
+            @KeyValue   = @KeyValue;
+
+        FETCH NEXT FROM cur INTO @KeyValue, @OriginalValue;
+    END;
+
+    CLOSE cur;
+    DEALLOCATE cur;
+
+    DROP TABLE #RowsToTokenize;
+END;
+GO
+
+++++++++++++**********************++++++++++++++++++++
+
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'SSN',           'SSN',   'Employee ID';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'FirstName',     'NAME',  'Employee ID';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'LastName',      'NAME',  'Employee ID';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'Home Address',  'ADDRESS','Employee ID';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'Zip',           'ZIP',   'Employee ID';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'Email',         'EMAIL', 'Employee ID';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'Phone',         'PHONE', 'Employee ID';
+EXEC dbo.usp_TokenizeColumn_RowWise 'B_iam', 'srcAya', 'Manager_Email', 'EMAIL', 'Employee ID';
+
+
+
