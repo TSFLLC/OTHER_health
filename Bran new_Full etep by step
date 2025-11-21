@@ -345,6 +345,37 @@ EXEC dbo.usp_DeTokenizeColumn
     'Phone', 
     'PHONE';
 
+========================/////////////============
+USE Masking;
+GO
+----Backup from original table
+UPDATE tgt
+SET tgt.Phone = bkp.Phone
+FROM B_iam.srcAya        AS tgt
+JOIN B_iam.srcAya_Backup AS bkp
+      ON tgt.[Employee ID] = bkp.[Employee ID];
+
+check
+SELECT TOP 20 
+    tgt.[Employee ID],
+    tgt.Phone AS CurrentPhone,
+    bkp.Phone AS BackupPhone
+FROM B_iam.srcAya        AS tgt
+JOIN B_iam.srcAya_Backup AS bkp
+      ON tgt.[Employee ID] = bkp.[Employee ID];
+
+-------Remove old mappings for Phone++++++++++++++++++++++++++++++
+
+
+DELETE FROM dbo.Token_Map
+WHERE TableSchema = 'B_iam'
+  AND TableName   = 'srcAya'
+  AND ColumnName  = 'Phone'
+  AND TokenType   = 'PHONE';
+
+
+
+
 
 
 
