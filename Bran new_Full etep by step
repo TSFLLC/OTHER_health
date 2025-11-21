@@ -322,6 +322,30 @@ ORDER BY OriginalValue;
 EXEC dbo.usp_DeTokenizeColumn 
     'B_iam', 'srcAya', 'SSN', 'SSN';
 
++++++++++++++++++++reverse phone number++++++++++++++++++++++
+
+USE Masking;
+GO
+
+UPDATE t
+SET t.Phone = m.OriginalValue
+FROM B_iam.srcAya AS t
+JOIN TokenizationDB.dbo.Token_Map AS m
+      ON m.TableSchema = 'B_iam'
+     AND m.TableName   = 'srcAya'
+     AND m.ColumnName  = 'Phone'
+     AND m.TokenType   = 'PHONE'
+     AND m.TokenValue  = t.Phone;   -- current masked value
+
+++++++++++generic proc
+
+EXEC dbo.usp_DeTokenizeColumn 
+    'B_iam', 
+    'srcAya', 
+    'Phone', 
+    'PHONE';
+
+
 
 
 
