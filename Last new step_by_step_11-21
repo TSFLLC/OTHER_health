@@ -307,6 +307,32 @@ ALTER TABLE [B_iam].[srcAya]
     ALTER COLUMN [Manager_Email]
     ADD MASKED WITH (FUNCTION = 'email()');
 
+++++++///Cheeck if mask---------------++++++++++
+SELECT 
+    c.name AS ColumnName,
+    c.is_masked,
+    c.masking_function
+FROM sys.masked_columns c
+JOIN sys.tables t ON c.object_id = t.object_id
+JOIN sys.schemas s ON t.schema_id = s.schema_id
+WHERE t.name = 'srcAya'
+  AND s.name = 'B_iam';
+
+
++++++++++++++++****************+++++++++UNMASK-------------------
+
+USE TERA;
+GO
+
+ALTER TABLE [B_iam].[srcAya]
+    ALTER COLUMN [Manager_Email] DROP MASKED;
+
+
+
+
+
+
+
 ----check-----
 SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
 FROM TERA.INFORMATION_SCHEMA.COLUMNS
