@@ -181,4 +181,27 @@ or keeps year only
 Just tell me what business rule you want for DOB.
 
 
+--------------------------+++++++++++++++++++---------------------------
+
+SELECT 
+    OriginalValue,
+    TokenValue,
+    COUNT(*) AS RowCount
+FROM TokenizationDB.dbo.Token_Map
+WHERE TableSchema = 'B_iam'
+  AND TableName   = 'srcAya'
+  AND ColumnName  = 'Phone'
+GROUP BY OriginalValue, TokenValue
+ORDER BY OriginalValue;
+
+
+
+++++++++++++++++++++++++
+SELECT TOP 10 OriginalValue, TokenValue
+FROM TokenizationDB.dbo.Token_Map
+WHERE TableSchema = 'B_iam'
+  AND TableName   = 'srcAya'
+  AND ColumnName  = 'Phone';
+
+
 
