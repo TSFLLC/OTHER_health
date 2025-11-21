@@ -271,7 +271,7 @@ EXEC dbo.usp_DeTokenizeColumn
     'B_iam', 'srcAya', 'Phone', 'PHONE';
 
 
-++++++++++++++++++++++++++++SECURITY RESTRAINT++++++++++Security: Restrict access to mapping table+++++++++++++
+++++++++++++++++++++++++++++Security: Restrict access to mapping table+++++++++++++
 
 USE [Ardent_DBA_Utilities];
 GO
@@ -280,14 +280,31 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'TokenizationAdmin')
     CREATE ROLE TokenizationAdmin;
 GO
-
--- Give only admins access
++++++Grant admin-only permissions on Tokenization schema-------------------------
 GRANT SELECT, INSERT, UPDATE, DELETE
 ON SCHEMA::Tokenization
 TO TokenizationAdmin;
 GO
 
--- REVOKE or DENY all non-admin users here as needed
+
++++++++++++-Deny all access for PUBLIC (non-admin users)+++++++This ensures all normal users cannot access the schema.++++++++++++++++++++++
+USE [Ardent_DBA_Utilities];
+GO
+
+DENY SELECT, INSERT, UPDATE, DELETE
+ON SCHEMA::Tokenization
+TO PUBLIC;
+GO
+
++++++++++++++++++ Add your real admins to the role  +++++++++++++++++++++++++++
+
+[Ardent_DBA_Utilities];
+GO
+
+ALTER ROLE TokenizationAdmin ADD MEMBER [DOMAIN\YourAdminUser];
+-- or:
+ALTER ROLE TokenizationAdmin ADD MEMBER [sql_admin_account];
+
 
 ++++++++++++++++++++++++++++++++++++++In TERA, give users access only to procs:++++++++++++++++
 USE [TERA];
@@ -295,8 +312,13 @@ GO
 
 GRANT EXECUTE ON dbo.usp_TokenizeColumn_SetBased TO SomeAppRole;
 GRANT EXECUTE ON dbo.usp_DeTokenizeColumn TO TokenizationAdmin;
+GO
 
++++++++++++++++(Optional but recommended)+++Deny cross-database direct access to the Tokenization database------
+USE [Ardent_DBA_Utilities];
+GO
 
+DENY CONNECT TO PUBLIC;
 
 ---------------////////For masking--------///////////
 
@@ -319,7 +341,7 @@ WHERE t.name = 'srcAya'
   AND s.name = 'B_iam';
 
 
-+++++++++++++++****************+++++++++UNMASK-------------------
++++++++++++++++++++++++UNMASK-------------------
 
 USE TERA;
 GO
