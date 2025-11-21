@@ -208,10 +208,10 @@ BEGIN
         JOIN src s
           ON CONVERT(NVARCHAR(400), t.' + QUOTENAME(@KeyColumn) + N') = s.KeyValue
         JOIN TokenizationDB.dbo.Token_Map m
-          ON m.TableSchema   = @SchemaName
-         AND m.TableName     = @TableName
-         AND m.ColumnName    = @ColumnName
-         AND m.TokenType     = @TokenType
+          ON m.TableSchema   = N''' + @SchemaName + N'''
+         AND m.TableName     = N''' + @TableName  + N'''
+         AND m.ColumnName    = N''' + @ColumnName + N'''
+         AND m.TokenType     = N''' + @TokenType  + N'''
          AND m.OriginalValue = s.OriginalValue;
     ';
 
@@ -220,6 +220,7 @@ BEGIN
     DROP TABLE #DistinctValues;
 END;
 GO
+
 
 ++++++++++++++++++++++++new generic reversal proc (uses Token_Map)++++++++++++++++++++++++++++++++++++++++
 USE Masking;
