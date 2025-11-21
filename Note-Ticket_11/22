@@ -1,0 +1,34 @@
+Implemented a Proof of Concept (POC) for the new Static Data Tokenization Framework to protect sensitive PII/PHI data in non-production environments while maintaining usability for application testing, BI development, and integration workflows.
+
+The solution includes a secure, deterministic, format-preserving tokenization process that allows for controlled reversal by designated administrators only.
+
+
+Scope of Work (Short Version)
+
+Created Tokenization Infrastructure
+
+Added new schema Tokenization in Ardent_DBA_Utilities.
+
+Created secure mapping table Tokenization.Tokeng_Map with unique index and restricted access.
+
+Implemented Deterministic Tokenization Function
+
+Built fn_FormatPreservingToken to generate format-preserving, repeatable tokens for all string-based PII fields.
+
+Developed Set-Based Tokenization Procedure in TERA
+
+Added usp_TokenizeColumn_SetBased for efficient, bulk tokenization using deterministic logic and unique key matching.
+
+Added Controlled Reversal Procedure
+
+Implemented usp_DeTokenizeColumn for authorized admin-only reversal of tokenized data.
+
+Enforced Security Model
+
+Created TokenizationAdmin role with exclusive access to mapping table.
+
+Denied all mapping-table access to non-admins; granted EXECUTE-only permissions for tokenization routines.
+
+Validated Tokenization End-to-End
+
+Successfully tokenized and reversed key PII columns including Email, Phone, SSN, Names, and Address fields.
