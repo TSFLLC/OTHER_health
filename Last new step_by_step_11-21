@@ -1,0 +1,334 @@
+----1.+++++++++++++++ Create schema + clean mapping table+++++++++++++++++++++++
+USE [Ardent_DBA_Utilities];
+GO
+
+/* 1.1 Create Tokenization schema */
+IF NOT EXISTS (
+    SELECT 1 FROM sys.schemas WHERE name = 'Tokenization'
+)
+BEGIN
+    EXEC('CREATE SCHEMA Tokenization AUTHORIZATION dbo;');
+END
+GO
+
+/* 1.2 Create mapping table */
+IF OBJECT_ID('Tokenization.Tokeng_Map', 'U') IS NOT NULL
+    DROP TABLE Tokenization.Tokeng_Map;
+GO
+
+CREATE TABLE Tokenization.Tokeng_Map
+(
+    TokenMapID    INT IDENTITY(1,1) PRIMARY KEY,
+    TableSchema   SYSNAME       NOT NULL,
+    TableName     SYSNAME       NOT NULL,
+    ColumnName    SYSNAME       NOT NULL,
+    TokenType     VARCHAR(50)   NOT NULL,
+    OriginalValue NVARCHAR(400) NOT NULL,
+    TokenValue    NVARCHAR(400) NOT NULL,
+    CreatedAt     DATETIME2(0)  NOT NULL DEFAULT SYSUTCDATETIME()
+);
+GO
+
+/* 1.3 Unique mapping for each original value */
+CREATE UNIQUE INDEX UX_TokengMap_OrigVal
+ON Tokenization.Tokeng_Map(TableSchema, TableName, ColumnName, TokenType, OriginalValue);
+GO
+
+
++++++++++++++++++++++In [Ardent_DBA_Utilities] — Create deterministic token function++++++++++++++++++++++
+
+USE [Ardent_DBA_Utilities];
+GO
+
+IF OBJECT_ID('Tokenization.fn_FormatPreservingToken', 'FN') IS NOT NULL
+    DROP FUNCTION Tokenization.fn_FormatPreservingToken;
+GO
+
+CREATE FUNCTION Tokenization.fn_FormatPreservingToken
+(
+    @OriginalValue NVARCHAR(400),
+    @MaxTokenLength INT
+)
+RETURNS NVARCHAR(100)
+AS
+BEGIN
+    DECLARE 
+        @NewToken NVARCHAR(100),
+        @Len      INT,
+        @i        INT,
+        @ch       NCHAR(1),
+        @code     INT,
+        @r        INT;
+
+    IF @OriginalValue IS NULL
+        RETURN NULL;
+
+    IF @MaxTokenLength <= 0 OR @MaxTokenLength IS NULL
+        SET @MaxTokenLength = 100;
+
+    SET @Len = LEN(@OriginalValue);
+    IF @Len > @MaxTokenLength SET @Len = @MaxTokenLength;
+
+    SET @NewToken = N'';
+    SET @i = 1;
+
+    WHILE @i <= @Len
+    BEGIN
+        SET @ch = SUBSTRING(@OriginalValue, @i, 1);
+        SET @code = UNICODE(@ch);
+
+        IF @code BETWEEN 48 AND 57               -- digit
+        BEGIN
+            SET @r = ABS(CHECKSUM(@OriginalValue, @i, 'digit')) % 10;
+            SET @NewToken += NCHAR(48 + @r);
+        END
+        ELSE IF @code BETWEEN 65 AND 90          -- Upper A–Z
+        BEGIN
+            SET @r = ABS(CHECKSUM(@OriginalValue, @i, 'upper')) % 26;
+            SET @NewToken += NCHAR(65 + @r);
+        END
+        ELSE IF @code BETWEEN 97 AND 122         -- Lower a–z
+        BEGIN
+            SET @r = ABS(CHECKSUM(@OriginalValue, @i, 'lower')) % 26;
+            SET @NewToken += NCHAR(97 + @r);
+        END
+        ELSE                                     -- keep punctuation/symbols
+        BEGIN
+            SET @NewToken += @ch;
+        END;
+
+        SET @i += 1;
+    END;
+
+    RETURN @NewToken;
+END;
+GO
+
+++++++++++++++++++Create the set-based tokenization procedure+++++++++++++++++++++++++++++++
+USE [TERA];
+GO
+
+IF OBJECT_ID('dbo.usp_TokenizeColumn_SetBased', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.usp_TokenizeColumn_SetBased;
+GO
+
+CREATE PROCEDURE dbo.usp_TokenizeColumn_SetBased
+    @SchemaName SYSNAME,
+    @TableName  SYSNAME,
+    @ColumnName SYSNAME,
+    @TokenType  VARCHAR(50),
+    @KeyColumn  SYSNAME
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @sql NVARCHAR(MAX),
+            @MaxLen INT,
+            @DataType SYSNAME;
+
+    -------------------------------------------------
+    -- Validate column exists and capture type/length
+    -------------------------------------------------
+    SELECT 
+        @DataType = t.name,
+        @MaxLen   = CASE 
+                        WHEN t.name IN ('nvarchar','nchar')
+                            THEN c.max_length / 2
+                        ELSE c.max_length
+                    END
+    FROM sys.columns c
+    JOIN sys.types t ON t.user_type_id = c.user_type_id
+    JOIN sys.objects o ON o.object_id = c.object_id
+    WHERE o.name = @TableName
+      AND SCHEMA_NAME(o.schema_id) = @SchemaName
+      AND c.name = @ColumnName;
+
+    IF @MaxLen IS NULL
+    BEGIN
+        RAISERROR('Column not found.',16,1);
+        RETURN;
+    END;
+
+    IF @DataType NOT IN ('char','nchar','varchar','nvarchar')
+    BEGIN
+        RAISERROR('Column must be a string type.',16,1);
+        RETURN;
+    END;
+
+    -------------------------------------------------
+    -- Collect DISTINCT values
+    -------------------------------------------------
+    IF OBJECT_ID('tempdb..#DistinctValues') IS NOT NULL
+        DROP TABLE #DistinctValues;
+
+    CREATE TABLE #DistinctValues (OriginalValue NVARCHAR(400));
+
+    SET @sql = N'
+        INSERT INTO #DistinctValues
+        SELECT DISTINCT CAST(' + QUOTENAME(@ColumnName) + N' AS NVARCHAR(400))
+        FROM ' + QUOTENAME(@SchemaName) + '.' + QUOTENAME(@TableName) + '
+        WHERE ' + QUOTENAME(@ColumnName) + ' IS NOT NULL;
+    ';
+
+    EXEC sp_executesql @sql;
+
+    -------------------------------------------------
+    -- Insert missing mappings into Ardent_DBA_Utilities.Tokenization.Tokeng_Map
+    -------------------------------------------------
+    INSERT INTO [Ardent_DBA_Utilities].Tokenization.Tokeng_Map
+        (TableSchema, TableName, ColumnName, TokenType, OriginalValue, TokenValue)
+    SELECT
+        @SchemaName,
+        @TableName,
+        @ColumnName,
+        @TokenType,
+        dv.OriginalValue,
+        [Ardent_DBA_Utilities].Tokenization.fn_FormatPreservingToken(dv.OriginalValue, @MaxLen)
+    FROM #DistinctValues dv
+    LEFT JOIN [Ardent_DBA_Utilities].Tokenization.Tokeng_Map m
+        ON m.TableSchema   = @SchemaName
+       AND m.TableName     = @TableName
+       AND m.ColumnName    = @ColumnName
+       AND m.TokenType     = @TokenType
+       AND m.OriginalValue = dv.OriginalValue
+    WHERE m.TokenMapID IS NULL;
+
+    -------------------------------------------------
+    -- Update real table with token values
+    -------------------------------------------------
+    SET @sql = N'
+        WITH src AS (
+            SELECT 
+                CONVERT(NVARCHAR(400), ' + QUOTENAME(@KeyColumn) + N') AS KeyValue,
+                CAST(' + QUOTENAME(@ColumnName) + N' AS NVARCHAR(400)) AS OriginalValue
+            FROM ' + QUOTENAME(@SchemaName) + '.' + QUOTENAME(@TableName) + N'
+            WHERE ' + QUOTENAME(@ColumnName) + ' IS NOT NULL
+        )
+        UPDATE t
+        SET ' + QUOTENAME(@ColumnName) + N' = m.TokenValue
+        FROM ' + QUOTENAME(@SchemaName) + '.' + QUOTENAME(@TableName) + ' t
+        JOIN src s
+             ON CONVERT(NVARCHAR(400), t.' + QUOTENAME(@KeyColumn) + ') = s.KeyValue
+        JOIN [Ardent_DBA_Utilities].Tokenization.Tokeng_Map m
+             ON m.TableSchema   = ''' + @SchemaName + N'''
+            AND m.TableName     = ''' + @TableName  + N'''
+            AND m.ColumnName    = ''' + @ColumnName + N'''
+            AND m.TokenType     = ''' + @TokenType  + N'''
+            AND m.OriginalValue = s.OriginalValue;
+    ';
+
+    EXEC sp_executesql @sql;
+
+    DROP TABLE #DistinctValues;
+END;
+GO
+
+
+++++++++++++++++++++++++Create the reversal procedure++++++++++++++++++++++++
+
+USE [TERA];
+GO
+
+IF OBJECT_ID('dbo.usp_DeTokenizeColumn', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.usp_DeTokenizeColumn;
+GO
+
+CREATE PROCEDURE dbo.usp_DeTokenizeColumn
+    @SchemaName SYSNAME,
+    @TableName  SYSNAME,
+    @ColumnName SYSNAME,
+    @TokenType  VARCHAR(50)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @sql NVARCHAR(MAX);
+
+    SET @sql = N'
+        UPDATE t
+        SET ' + QUOTENAME(@ColumnName) + N' = m.OriginalValue
+        FROM ' + QUOTENAME(@SchemaName) + '.' + QUOTENAME(@TableName) + N' t
+        JOIN [Ardent_DBA_Utilities].Tokenization.Tokeng_Map m
+          ON m.TableSchema = ''' + @SchemaName + N'''
+         AND m.TableName   = ''' + @TableName  + N'''
+         AND m.ColumnName  = ''' + @ColumnName + N'''
+         AND m.TokenType   = ''' + @TokenType  + N'''
+         AND m.TokenValue  = t.' + QUOTENAME(@ColumnName) + N';
+    ';
+
+    EXEC(@sql);
+END;
+GO
+
+
++++++++++++++++++++++Tokenize phone++++++++++++++++++++++++
+
+EXEC dbo.usp_TokenizeColumn_SetBased
+    'B_iam', 'srcAya', 'Phone', 'PHONE', 'Employee ID';
+
++++++++++++++++++++++reverse phone++++++++++++++++++++++
+EXEC dbo.usp_DeTokenizeColumn
+    'B_iam', 'srcAya', 'Phone', 'PHONE';
+
+
+++++++++++++++++++++++++++++SECURITY RESTRAINT++++++++++Security: Restrict access to mapping table+++++++++++++
+
+USE [Ardent_DBA_Utilities];
+GO
+
+-- Create admin-only role
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'TokenizationAdmin')
+    CREATE ROLE TokenizationAdmin;
+GO
+
+-- Give only admins access
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON SCHEMA::Tokenization
+TO TokenizationAdmin;
+GO
+
+-- REVOKE or DENY all non-admin users here as needed
+
+++++++++++++++++++++++++++++++++++++++In TERA, give users access only to procs:++++++++++++++++
+USE [TERA];
+GO
+
+GRANT EXECUTE ON dbo.usp_TokenizeColumn_SetBased TO SomeAppRole;
+GRANT EXECUTE ON dbo.usp_DeTokenizeColumn TO TokenizationAdmin;
+
+
+
+---------------////////For masking--------///////////
+
+USE TERA;
+GO
+
+ALTER TABLE [B_iam].[srcAya]
+    ALTER COLUMN [Manager_Email]
+    ADD MASKED WITH (FUNCTION = 'email()');
+
+----check-----
+SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+FROM TERA.INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'B_iam'
+  AND TABLE_NAME = 'srcAya'
+  AND COLUMN_NAME = 'Manager_Email';
+
+
+++++++++++++++++++If no work-----------------------------------------------------/////////////////////////////////////
+Already masked
+If you already masked it once and are trying again, you may need to drop the existing mask:
+
+ALTER TABLE [B_iam].[srcAya]
+    ALTER COLUMN [Manager_Email] DROP MASKED;
+
+
+Then re-add:
+
+ALTER TABLE [B_iam].[srcAya]
+    ALTER COLUMN [Manager_Email]
+    ADD MASKED WITH (FUNCTION = 'email()');
+
+
+
+
