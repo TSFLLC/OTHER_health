@@ -1,0 +1,327 @@
+
+
+--1. recreate Token_Map and index
+USE TokenizationDB;
+GO
+
+IF OBJECT_ID('dbo.Token_Map', 'U') IS NOT NULL
+    DROP TABLE dbo.Token_Map;
+GO
+
+CREATE TABLE dbo.Token_Map
+(
+    TokenMapID    INT IDENTITY(1,1) PRIMARY KEY,
+    TableSchema   SYSNAME       NOT NULL,
+    TableName     SYSNAME       NOT NULL,
+    ColumnName    SYSNAME       NOT NULL,
+    TokenType     VARCHAR(50)   NOT NULL,
+    OriginalValue NVARCHAR(400) NOT NULL,
+    TokenValue    NVARCHAR(400) NOT NULL,
+    CreatedAt     DATETIME2(0)  NOT NULL DEFAULT SYSUTCDATETIME()
+);
+
+-- One mapping per original value per column
+CREATE UNIQUE INDEX UX_TokenMap_OrigVal
+ON dbo.Token_Map(TableSchema, TableName, ColumnName, TokenType, OriginalValue);
+GO
+
+--2-------------TokenizationDB: format-preserving string function
+USE TokenizationDB;
+GO
+
+IF OBJECT_ID('dbo.fn_FormatPreservingToken', 'FN') IS NOT NULL
+    DROP FUNCTION dbo.fn_FormatPreservingToken;
+GO
+
+CREATE FUNCTION dbo.fn_FormatPreservingToken
+(
+    @OriginalValue NVARCHAR(400),
+    @MaxTokenLength INT
+)
+RETURNS NVARCHAR(100)
+AS
+BEGIN
+    DECLARE 
+        @NewToken NVARCHAR(100),
+        @Len      INT,
+        @i        INT,
+        @ch       NCHAR(1),
+        @code     INT,
+        @r        INT;
+
+    IF @OriginalValue IS NULL
+        RETURN NULL;
+
+    IF @MaxTokenLength IS NULL OR @MaxTokenLength <= 0
+        SET @MaxTokenLength = 100;
+
+    SET @Len = LEN(@OriginalValue);
+    IF @Len > @MaxTokenLength SET @Len = @MaxTokenLength;
+
+    SET @NewToken = N'';
+    SET @i = 1;
+
+    WHILE @i <= @Len
+    BEGIN
+        SET @ch   = SUBSTRING(@OriginalValue, @i, 1);
+        SET @code = UNICODE(@ch);
+
+        -- digits
+        IF @code BETWEEN 48 AND 57
+        BEGIN
+            SET @r = ABS(CHECKSUM(@OriginalValue, @i, 'digit')) % 10;
+            SET @NewToken += NCHAR(48 + @r);
+        END
+        -- A–Z
+        ELSE IF @code BETWEEN 65 AND 90
+        BEGIN
+            SET @r = ABS(CHECKSUM(@OriginalValue, @i, 'upper')) % 26;
+            SET @NewToken += NCHAR(65 + @r);
+        END
+        -- a–z
+        ELSE IF @code BETWEEN 97 AND 122
+        BEGIN
+            SET @r = ABS(CHECKSUM(@OriginalValue, @i, 'lower')) % 26;
+            SET @NewToken += NCHAR(97 + @r);
+        END
+        -- everything else (spaces, @, ., -, etc.) stays as is
+        ELSE
+        BEGIN
+            SET @NewToken += @ch;
+        END;
+
+        SET @i += 1;
+    END;
+
+    RETURN @NewToken;
+END;
+GO
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+USE Masking;
+GO
+
+IF OBJECT_ID('dbo.usp_TokenizeColumn_SetBased', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.usp_TokenizeColumn_SetBased;
+GO
+
+CREATE PROCEDURE dbo.usp_TokenizeColumn_SetBased
+    @SchemaName SYSNAME,
+    @TableName  SYSNAME,
+    @ColumnName SYSNAME,
+    @TokenType  VARCHAR(50),
+    @KeyColumn  SYSNAME         -- e.g. 'Employee ID'
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @sql NVARCHAR(MAX),
+            @MaxLen INT,
+            @DataType SYSNAME;
+
+    -------------------------------------------------
+    -- 1) Validate column type & length
+    -------------------------------------------------
+    SELECT 
+        @DataType = t.name,
+        @MaxLen   = CASE 
+                        WHEN t.name IN ('nvarchar','nchar')
+                             THEN c.max_length / 2
+                        ELSE c.max_length
+                    END
+    FROM sys.columns c
+    JOIN sys.types   t ON c.user_type_id = t.user_type_id
+    JOIN sys.objects o ON c.object_id    = o.object_id
+    WHERE o.name = @TableName
+      AND SCHEMA_NAME(o.schema_id) = @SchemaName
+      AND c.name = @ColumnName;
+
+    IF @MaxLen IS NULL
+    BEGIN
+        RAISERROR('usp_TokenizeColumn_SetBased: column not found.',16,1);
+        RETURN;
+    END;
+
+    IF @DataType NOT IN ('char','nchar','varchar','nvarchar')
+    BEGIN
+        RAISERROR('usp_TokenizeColumn_SetBased: only char/varchar/nchar/nvarchar supported.',16,1);
+        RETURN;
+    END;
+
+    -------------------------------------------------
+    -- 2) Build temp with DISTINCT original values
+    -------------------------------------------------
+    IF OBJECT_ID('tempdb..#DistinctValues') IS NOT NULL
+        DROP TABLE #DistinctValues;
+
+    CREATE TABLE #DistinctValues
+    (
+        OriginalValue NVARCHAR(400) NOT NULL
+    );
+
+    SET @sql = N'
+        INSERT INTO #DistinctValues (OriginalValue)
+        SELECT DISTINCT CAST(' + QUOTENAME(@ColumnName) + N' AS NVARCHAR(400))
+        FROM ' + QUOTENAME(@SchemaName) + N'.' + QUOTENAME(@TableName) + N'
+        WHERE ' + QUOTENAME(@ColumnName) + N' IS NOT NULL;
+    ';
+
+    EXEC sp_executesql @sql;
+
+    -------------------------------------------------
+    -- 3) Insert missing mappings into Token_Map
+    -------------------------------------------------
+    INSERT INTO TokenizationDB.dbo.Token_Map
+        (TableSchema, TableName, ColumnName, TokenType, OriginalValue, TokenValue)
+    SELECT
+        @SchemaName,
+        @TableName,
+        @ColumnName,
+        @TokenType,
+        dv.OriginalValue,
+        TokenizationDB.dbo.fn_FormatPreservingToken(dv.OriginalValue, @MaxLen)
+    FROM #DistinctValues dv
+    LEFT JOIN TokenizationDB.dbo.Token_Map m
+      ON m.TableSchema   = @SchemaName
+     AND m.TableName     = @TableName
+     AND m.ColumnName    = @ColumnName
+     AND m.TokenType     = @TokenType
+     AND m.OriginalValue = dv.OriginalValue
+    WHERE m.TokenMapID IS NULL;   -- only new originals
+
+    -------------------------------------------------
+    -- 4) Update the real table to token values using KeyColumn
+    -------------------------------------------------
+    SET @sql = N'
+        WITH src AS (
+            SELECT 
+                CONVERT(NVARCHAR(400), ' + QUOTENAME(@KeyColumn) + N') AS KeyValue,
+                CAST(' + QUOTENAME(@ColumnName) + N' AS NVARCHAR(400)) AS OriginalValue
+            FROM ' + QUOTENAME(@SchemaName) + N'.' + QUOTENAME(@TableName) + N'
+            WHERE ' + QUOTENAME(@ColumnName) + N' IS NOT NULL
+        )
+        UPDATE t
+        SET ' + QUOTENAME(@ColumnName) + N' = m.TokenValue
+        FROM ' + QUOTENAME(@SchemaName) + N'.' + QUOTENAME(@TableName) + N' t
+        JOIN src s
+          ON CONVERT(NVARCHAR(400), t.' + QUOTENAME(@KeyColumn) + N') = s.KeyValue
+        JOIN TokenizationDB.dbo.Token_Map m
+          ON m.TableSchema   = @SchemaName
+         AND m.TableName     = @TableName
+         AND m.ColumnName    = @ColumnName
+         AND m.TokenType     = @TokenType
+         AND m.OriginalValue = s.OriginalValue;
+    ';
+
+    EXEC sp_executesql @sql;
+
+    DROP TABLE #DistinctValues;
+END;
+GO
+
+++++++++++++++++++++++++new generic reversal proc (uses Token_Map)++++++++++++++++++++++++++++++++++++++++
+USE Masking;
+GO
+
+IF OBJECT_ID('dbo.usp_DeTokenizeColumn', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.usp_DeTokenizeColumn;
+GO
+
+CREATE PROCEDURE dbo.usp_DeTokenizeColumn
+    @SchemaName SYSNAME,
+    @TableName  SYSNAME,
+    @ColumnName SYSNAME,
+    @TokenType  VARCHAR(50)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @sql NVARCHAR(MAX);
+
+    SET @sql = N'
+        UPDATE t
+        SET ' + QUOTENAME(@ColumnName) + N' = m.OriginalValue
+        FROM ' + QUOTENAME(@SchemaName) + N'.' + QUOTENAME(@TableName) + N' t
+        JOIN TokenizationDB.dbo.Token_Map m
+          ON m.TableSchema = @SchemaNameParam
+         AND m.TableName   = @TableNameParam
+         AND m.ColumnName  = @ColumnNameParam
+         AND m.TokenType   = @TokenTypeParam
+         AND m.TokenValue  = t.' + QUOTENAME(@ColumnName) + N';
+    ';
+
+    EXEC sp_executesql
+        @sql,
+        N'@SchemaNameParam SYSNAME, @TableNameParam SYSNAME, @ColumnNameParam SYSNAME, @TokenTypeParam VARCHAR(50)',
+        @SchemaNameParam = @SchemaName,
+        @TableNameParam  = @TableName,
+        @ColumnNameParam = @ColumnName,
+        @TokenTypeParam  = @TokenType;
+END;
+GO
+
+++++++++++++++++++++++++++++++++++++++++++++tokenize B_iam.srcAya SSN (and others)
+
+USE Masking;
+GO
+
+-- SSN
+EXEC dbo.usp_TokenizeColumn_SetBased 
+    'B_iam', 'srcAya', 'SSN', 'SSN', 'Employee ID';
+
+-- FirstName
+EXEC dbo.usp_TokenizeColumn_SetBased 
+    'B_iam', 'srcAya', 'FirstName', 'NAME', 'Employee ID';
+
+-- LastName
+EXEC dbo.usp_TokenizeColumn_SetBased 
+    'B_iam', 'srcAya', 'LastName', 'NAME', 'Employee ID';
+
+-- Home Address
+EXEC dbo.usp_TokenizeColumn_SetBased 
+    'B_iam', 'srcAya', 'Home Address', 'ADDRESS', 'Employee ID';
+
+-- Zip
+EXEC dbo.usp_TokenizeColumn_SetBased 
+    'B_iam', 'srcAya', 'Zip', 'ZIP', 'Employee ID';
+
+-- Email
+EXEC dbo.usp_TokenizeColumn_SetBased 
+    'B_iam', 'srcAya', 'Email', 'EMAIL', 'Employee ID';
+
+-- Phone
+EXEC dbo.usp_TokenizeColumn_SetBased 
+    'B_iam', 'srcAya', 'Phone', 'PHONE', 'Employee ID';
+
+
+
+++++++++++++++++++++++++++++Validate that mapping table now has many rows+++++++++++++++++++++++++++++++++++++++
+
+SELECT 
+    COUNT(*)                      AS TotalMappings,
+    COUNT(DISTINCT OriginalValue) AS DistinctOriginalValues
+FROM dbo.Token_Map
+WHERE TableSchema = 'B_iam'
+  AND TableName   = 'srcAya'
+  AND ColumnName  = 'SSN'
+  AND TokenType   = 'SSN';
+
+SELECT TOP 20 OriginalValue, TokenValue
+FROM dbo.Token_Map
+WHERE TableSchema = 'B_iam'
+  AND TableName   = 'srcAya'
+  AND ColumnName  = 'SSN'
+  AND TokenType   = 'SSN'
+ORDER BY OriginalValue;
+
+++++++++++++++++++++++++++reverse SSN for srcAya:++++++++++++++++++++++++++
+
+EXEC dbo.usp_DeTokenizeColumn 
+    'B_iam', 'srcAya', 'SSN', 'SSN';
+
+
+
+
+
