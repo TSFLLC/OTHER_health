@@ -1,0 +1,132 @@
+See what’s going on with tempdb
+
+Run this on the server:
+
+USE tempdb;
+GO
+
+SELECT 
+    name,
+    size/128.0       AS CurrentSizeMB,
+    max_size, 
+    max_size/128.0   AS MaxSizeMB,
+    growth,
+    is_percent_growth,
+    physical_name
+FROM sys.database_files;
+
+
+Interpret:
+
+CurrentSizeMB = current file size
+
+MaxSizeMB = max size allowed
+
+-1 or very large → essentially unlimited (up to 16 TB or disk size)
+
+If CurrentSizeMB == MaxSizeMB → you hit the cap
+
+is_percent_growth = 0 → growth in MB (good), 1 → percent (bad)
+
+Also check Windows free space on the volume where tempdb lives.
+
+2. Common causes & fixes
+Scenario A – Max size reached
+
+If CurrentSizeMB is the same as MaxSizeMB and there’s still free disk:
+
+Increase max size or set to unlimited (careful with disk):
+
+ALTER DATABASE tempdb 
+MODIFY FILE (
+    NAME = tempdev,       -- repeat for all data files
+    MAXSIZE = UNLIMITED   -- or a higher explicit size, e.g. 51200MB
+);
+GO
+
+
+Also make sure autogrowth is reasonable (you mentioned 500 MB – that’s fine):
+
+ALTER DATABASE tempdb 
+MODIFY FILE (
+    NAME = tempdev,
+    FILEGROWTH = 500MB
+);
+GO
+
+
+Do this for every tempdb data file, same size & same growth.
+
+Scenario B – Autogrowth disabled
+
+If growth = 0, the file can’t grow:
+
+ALTER DATABASE tempdb 
+MODIFY FILE (
+    NAME = tempdev,
+    FILEGROWTH = 500MB  -- or 512MB / 1024MB, your choice
+);
+GO
+
+
+Again, repeat for each data file and ensure the log has growth too.
+
+Scenario C – Disk is actually full
+
+If MaxSizeMB still has room, but Windows shows little or no free space on the drive:
+
+Add more disk space to that volume
+
+Or move tempdb to a larger / faster drive
+
+Or shrink/move other databases off that drive
+
+Move tempdb example (requires restart):
+
+USE master;
+GO
+
+ALTER DATABASE tempdb 
+MODIFY FILE (
+    NAME = tempdev,
+    FILENAME = 'E:\SQLData\tempdb.mdf'
+);
+
+ALTER DATABASE tempdb 
+MODIFY FILE (
+    NAME = templog,
+    FILENAME = 'E:\SQLLog\templog.ldf'
+);
+GO
+-- Then restart SQL Server service
+
+3. Longer-term tempdb tuning (so jobs stop failing)
+
+Since this happened during a job doing a dbo.SORT, I’d also:
+
+Pre-size tempdb so it rarely grows:
+
+Set initial size based on observed peak usage (for example, 20–30 GB total if your workload needs it).
+
+Use multiple data files with same size/growth (e.g., 4 or 8 files depending on CPU and contention).
+
+Keep autogrowth ON with a fixed MB increment (500–1024 MB).
+
+Put tempdb on fast SSD/NVMe with enough free space.
+
+Example starting point for 4 data files:
+
+ALTER DATABASE tempdb 
+MODIFY FILE (NAME = tempdev, SIZE = 8192MB, FILEGROWTH = 500MB);
+ALTER DATABASE tempdb 
+MODIFY FILE (NAME = temp2,   SIZE = 8192MB, FILEGROWTH = 500MB);
+ALTER DATABASE tempdb 
+MODIFY FILE (NAME = temp3,   SIZE = 8192MB, FILEGROWTH = 500MB);
+ALTER DATABASE tempdb 
+MODIFY FILE (NAME = temp4,   SIZE = 8192MB, FILEGROWTH = 500MB);
+
+ALTER DATABASE tempdb 
+MODIFY FILE (NAME = templog, SIZE = 4096MB, FILEGROWTH = 256MB);
+
+
+Adjust sizes to your environment.
