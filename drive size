@@ -1,0 +1,6 @@
+SELECT DISTINCT
+    vs.volume_mount_point,
+    vs.total_bytes/1024/1024/1024 AS TotalGB,
+    vs.available_bytes/1024/1024/1024 AS FreeGB
+FROM sys.master_files AS mf
+CROSS APPLY sys.dm_os_volume_stats(mf.database_id, mf.file_id) AS vs;
