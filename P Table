@@ -1,0 +1,221 @@
+/* =========================================================
+   1. Create test database + schema
+   ========================================================= */
+IF DB_ID('TERA') IS NULL
+    CREATE DATABASE TERA;
+GO
+
+USE TERA;
+GO
+
+IF SCHEMA_ID('B_epic') IS NULL
+    EXEC('CREATE SCHEMA B_epic');
+GO
+
+/* =========================================================
+   2. Create Patient table (columns you are masking)
+   ========================================================= */
+IF OBJECT_ID('B_epic.Patient', 'U') IS NOT NULL
+    DROP TABLE B_epic.Patient;
+GO
+
+CREATE TABLE [B_epic].[Patient] (
+    PAT_ID             INT           NOT NULL PRIMARY KEY,
+    PAT_MRN_ID         VARCHAR(50)   NULL,
+    SSN                VARCHAR(11)   NULL,
+    PATIENTFIRSTNAME   VARCHAR(100)  NULL,
+    PATIENTLASTNAME    VARCHAR(100)  NULL,
+    BIRTH_DATE         DATE          NULL,
+    HOME_PHONE         VARCHAR(20)   NULL,
+    EMAIL_ADDRESS      VARCHAR(255)  NULL,
+    ADD_LINE_1         VARCHAR(255)  NULL,
+    CITY               VARCHAR(100)  NULL,
+    STATE_C            VARCHAR(50)   NULL,
+    ZIP                VARCHAR(10)   NULL
+);
+GO
+
+/* =========================================================
+   3. Insert some sample clear-text data
+   ========================================================= */
+INSERT INTO [B_epic].[Patient] (
+    PAT_ID, PAT_MRN_ID, SSN, PATIENTFIRSTNAME, PATIENTLASTNAME,
+    BIRTH_DATE, HOME_PHONE, EMAIL_ADDRESS, ADD_LINE_1, CITY, STATE_C, ZIP
+)
+VALUES
+(1, 'MRN001', '123-45-6789', 'John',   'Doe',   '1985-06-15', '7135551111',
+ 'john.doe@test.com', '123 Main St',   'Houston', 'TX', '77001'),
+(2, 'MRN002', '987-65-4321', 'Maria',  'Lopez', '1978-02-03', '8325552222',
+ 'maria.lopez@test.com', '456 Oak Ave', 'Dallas',  'TX', '75201'),
+(3, 'MRN003', '555-44-3333', 'Robert', 'Smith', '1992-11-20', '3465553333',
+ 'robert.smith@test.com', '789 Pine Rd', 'Austin', 'TX', '73301');
+GO
+
+-- See original (unmasked) data
+SELECT * FROM [B_epic].[Patient];
+GO
+
+/* =========================================================
+   4. OPTIONAL – backup table before masking
+   ========================================================= */
+IF OBJECT_ID('B_epic.Patient_Backup_BeforeMasking', 'U') IS NOT NULL
+    DROP TABLE B_epic.Patient_Backup_BeforeMasking;
+GO
+
+SELECT *
+INTO [B_epic].[Patient_Backup_BeforeMasking]
+FROM [B_epic].[Patient];
+GO
+
+/* =========================================================
+   5. STATIC MASKING UPDATE (one-time)
+   ========================================================= */
+UPDATE p
+SET
+    -- If you want to also mask PAT_ID, uncomment this:
+    -- PAT_ID             = ABS(CHECKSUM(p.PAT_ID)) % 1000000000,
+
+    PAT_MRN_ID          = 'MRN' + RIGHT(CONVERT(varchar(20),
+                              ABS(CHECKSUM(p.PAT_MRN_ID, p.PAT_ID))), 8),
+
+    SSN                 = STUFF(
+                              STUFF(
+                                  RIGHT('000000000' + CAST(
+                                      ABS(CHECKSUM(p.SSN, p.PAT_ID)) % 1000000000 AS varchar(9)
+                                  ), 9),
+                              4, 0, '-'),
+                          7, 0, '-'),
+
+    PATIENTFIRSTNAME    = 'FN_' + RIGHT(CONVERT(varchar(20),
+                              ABS(CHECKSUM(p.PATIENTFIRSTNAME, p.PAT_ID))), 6),
+
+    PATIENTLASTNAME     = 'LN_' + RIGHT(CONVERT(varchar(20),
+                              ABS(CHECKSUM(p.PATIENTLASTNAME, p.PAT_ID))), 6),
+
+    BIRTH_DATE          = CASE 
+                              WHEN p.BIRTH_DATE IS NULL THEN NULL
+                              ELSE DATEADD(DAY,
+                                  ABS(CHECKSUM(p.BIRTH_DATE, p.PAT_ID)) % 3650,
+                                  '1950-01-01')
+                          END,
+
+    HOME_PHONE          = '(' +
+                          RIGHT('000' + CAST(ABS(CHECKSUM(p.HOME_PHONE, p.PAT_ID)) % 1000 AS varchar(3)), 3)
+                          + ') ' +
+                          RIGHT('000' + CAST(ABS(CHECKSUM(p.HOME_PHONE, p.PAT_ID, 1)) % 1000 AS varchar(3)), 3)
+                          + '-' +
+                          RIGHT('0000' + CAST(ABS(CHECKSUM(p.HOME_PHONE, p.PAT_ID, 2)) % 10000 AS varchar(4)), 4),
+
+    EMAIL_ADDRESS       = 'masked+' +
+                          RIGHT(CONVERT(varchar(20),
+                              ABS(CHECKSUM(p.EMAIL_ADDRESS, p.PAT_ID))), 8)
+                          + '@example.dev',
+
+    ADD_LINE_1          = 'Masked Address ' +
+                          RIGHT(CONVERT(varchar(10),
+                              ABS(CHECKSUM(p.ADD_LINE_1, p.PAT_ID))), 4),
+
+    CITY                = 'MaskedCity',
+
+    STATE_C             = 'MS',     -- generic state for masking
+
+    ZIP                 = RIGHT('00000' + CAST(
+                              ABS(CHECKSUM(p.ZIP, p.PAT_ID)) % 100000 AS varchar(5)
+                          ), 5)
+FROM [B_epic].[Patient] p;
+GO
+
+-- Check masked data
+SELECT * FROM [B_epic].[Patient];
+GO
+
+/* =========================================================
+   6. TRIGGER TO AUTO-MASK NEW / UPDATED ROWS
+   ========================================================= */
+IF OBJECT_ID('B_epic.trg_Patient_Mask_Dev', 'TR') IS NOT NULL
+    DROP TRIGGER B_epic.trg_Patient_Mask_Dev;
+GO
+
+CREATE TRIGGER [B_epic].[trg_Patient_Mask_Dev]
+ON [B_epic].[Patient]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Avoid infinite recursion
+    IF TRIGGER_NESTLEVEL() > 1 RETURN;
+
+    UPDATE p
+    SET
+        -- If you also want to change PAT_ID inside DEV, uncomment:
+        -- PAT_ID             = ABS(CHECKSUM(i.PAT_ID)) % 1000000000,
+
+        PAT_MRN_ID          = 'MRN' + RIGHT(CONVERT(varchar(20),
+                                  ABS(CHECKSUM(i.PAT_MRN_ID, i.PAT_ID))), 8),
+
+        SSN                 = STUFF(
+                                  STUFF(
+                                      RIGHT('000000000' + CAST(
+                                          ABS(CHECKSUM(i.SSN, i.PAT_ID)) % 1000000000 AS varchar(9)
+                                      ), 9),
+                                  4, 0, '-'),
+                              7, 0, '-'),
+
+        PATIENTFIRSTNAME    = 'FN_' + RIGHT(CONVERT(varchar(20),
+                                  ABS(CHECKSUM(i.PATIENTFIRSTNAME, i.PAT_ID))), 6),
+
+        PATIENTLASTNAME     = 'LN_' + RIGHT(CONVERT(varchar(20),
+                                  ABS(CHECKSUM(i.PATIENTLASTNAME, i.PAT_ID))), 6),
+
+        BIRTH_DATE          = CASE 
+                                  WHEN i.BIRTH_DATE IS NULL THEN NULL
+                                  ELSE DATEADD(DAY,
+                                      ABS(CHECKSUM(i.BIRTH_DATE, i.PAT_ID)) % 3650,
+                                      '1950-01-01')
+                              END,
+
+        HOME_PHONE          = '(' +
+                              RIGHT('000' + CAST(ABS(CHECKSUM(i.HOME_PHONE, i.PAT_ID)) % 1000 AS varchar(3)), 3)
+                              + ') ' +
+                              RIGHT('000' + CAST(ABS(CHECKSUM(i.HOME_PHONE, i.PAT_ID, 1)) % 1000 AS varchar(3)), 3)
+                              + '-' +
+                              RIGHT('0000' + CAST(ABS(CHECKSUM(i.HOME_PHONE, i.PAT_ID, 2)) % 10000 AS varchar(4)), 4),
+
+        EMAIL_ADDRESS       = 'masked+' +
+                              RIGHT(CONVERT(varchar(20),
+                                  ABS(CHECKSUM(i.EMAIL_ADDRESS, i.PAT_ID))), 8)
+                              + '@example.dev',
+
+        ADD_LINE_1          = 'Masked Address ' +
+                              RIGHT(CONVERT(varchar(10),
+                                  ABS(CHECKSUM(i.ADD_LINE_1, i.PAT_ID))), 4),
+
+        CITY                = 'MaskedCity',
+        STATE_C             = 'MS',
+
+        ZIP                 = RIGHT('00000' + CAST(
+                                  ABS(CHECKSUM(i.ZIP, i.PAT_ID)) % 100000 AS varchar(5)
+                              ), 5)
+    FROM [B_epic].[Patient] p
+    JOIN inserted i
+        ON p.PAT_ID = i.PAT_ID;
+END;
+GO
+
+/* =========================================================
+   7. Test the trigger with a new insert
+   ========================================================= */
+INSERT INTO [B_epic].[Patient] (
+    PAT_ID, PAT_MRN_ID, SSN, PATIENTFIRSTNAME, PATIENTLASTNAME,
+    BIRTH_DATE, HOME_PHONE, EMAIL_ADDRESS, ADD_LINE_1, CITY, STATE_C, ZIP
+)
+VALUES (
+    10, 'REALMRN10', '111-22-3333', 'Alice', 'Johnson',
+    '1990-09-09', '2815559999', 'alice.johnson@test.com',
+    '999 Test Blvd', 'San Antonio', 'TX', '78201'
+);
+GO
+
+SELECT * FROM [B_epic].[Patient] WHERE PAT_ID = 10;
+GO
