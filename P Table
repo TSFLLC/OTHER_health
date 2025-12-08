@@ -219,3 +219,30 @@ GO
 
 SELECT * FROM [B_epic].[Patient] WHERE PAT_ID = 10;
 GO
+
+
+Steps in SSIS (OLE DB Destination)
+
+Open the SSIS package that loads data into [B_epic].[Patient].
+
+Open the Data Flow that contains the OLE DB Destination for this table.
+
+Double-click the OLE DB Destination.
+
+In Data access mode, make sure it is set to:
+
+Table or view – fast load
+
+In the same window, find the FastLoadOptions setting (sometimes under the “Connection Manager” page or Advanced properties).
+
+Set FastLoadOptions to include FIRE_TRIGGERS, for example:
+
+FIRE_TRIGGERS
+or, if other options are already there:
+
+TABLOCK, CHECK_CONSTRAINTS, FIRE_TRIGGERS
+
+Save the package and redeploy / run it.
+
+
+
