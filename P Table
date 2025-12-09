@@ -245,4 +245,25 @@ TABLOCK, CHECK_CONSTRAINTS, FIRE_TRIGGERS
 Save the package and redeploy / run it.
 
 
++++++++++++++++++++++//////+++++++++++++++++++++++++++++++////++++++++++++++++++++++++++++
+
+UPDATE p
+SET
+    [DateOfBirth] = DATEFROMPARTS(
+                        1940 + ABS(CHECKSUM(p.MaskRowID)) % 60,   -- year 1940–1999
+                        1 + ABS(CHECKSUM(p.MaskRowID*11)) % 12,   -- month 1–12
+                        1 + ABS(CHECKSUM(p.MaskRowID*17)) % 28),  -- day 1–28
+    [ReligiousAffiliation] = 'Unknown',
+    [Address 1: Street 1]  = 'Street ' + CAST(p.MaskRowID AS VARCHAR(10)),
+    [Address 1: Street 2]  = NULL,
+    [Address1: City]       = 'City ' + CAST(p.MaskRowID % 1000 AS VARCHAR(4)),
+    [Address2: Zip]        = RIGHT('00000'
+                               + CAST(ABS(CHECKSUM(p.MaskRowID)) % 99999 AS VARCHAR(5)), 5),
+    [PatientFirstName]     = 'FN' + RIGHT(CAST(ABS(CHECKSUM(p.MaskRowID)) AS VARCHAR(10)),4),
+    [PatientLastName]      = 'LN' + RIGHT(CAST(ABS(CHECKSUM(p.MaskRowID*7)) AS VARCHAR(10)),4),
+    [Primary Email]        = 'user' + CAST(p.MaskRowID AS VARCHAR(10)) + '@example.com'
+FROM dbo.MyPatientTable p;
+
+
+
 
