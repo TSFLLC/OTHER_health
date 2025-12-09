@@ -264,103 +264,6 @@ SET
     [Primary Email]        = 'user' + CAST(p.MaskRowID AS VARCHAR(10)) + '@example.com'
 FROM dbo.MyPatientTable p;
 +++++++++++++++++++++++++++++++++++++++++/////+++++++++++++++++++++++++++++++
-UPDATE t
-SET
-    -- DOB: between 1940 and ~2010
-    DateofBirth =
-        DATEADD(
-            DAY,
-            ABS(CHECKSUM(t.PAT_ENC_CSN_ID)) % 25550,   -- up to ~70 years
-            CONVERT(date, '1940-01-01')
-        ),
-
-    -- Religious affiliation: generic small set
-    ReligiousAffiliation =
-        CASE ABS(CHECKSUM(t.PAT_ENC_CSN_ID * 3)) % 6
-            WHEN 0 THEN 'Unknown'
-            WHEN 1 THEN 'Christian'
-            WHEN 2 THEN 'Muslim'
-            WHEN 3 THEN 'Jewish'
-            WHEN 4 THEN 'Hindu'
-            WHEN 5 THEN 'Other'
-        END,
-
-    -- Street 1: realistic street format
-    [Address 1: Street 1] =
-        CAST(100 + (ABS(CHECKSUM(t.PAT_ENC_CSN_ID)) % 9000) AS varchar(5))
-        + ' '
-        + CASE ABS(CHECKSUM(t.PAT_ENC_CSN_ID * 5)) % 5
-              WHEN 0 THEN 'Oak St'
-              WHEN 1 THEN 'Maple Ave'
-              WHEN 2 THEN 'Pine Dr'
-              WHEN 3 THEN 'Cedar Ln'
-              WHEN 4 THEN 'Elm St'
-          END,
-
-    -- Street 2: sometimes an apartment
-    [Address 1: Street 2] =
-        CASE WHEN ABS(CHECKSUM(t.PAT_ENC_CSN_ID * 7)) % 3 = 0
-             THEN 'Apt ' + CAST(1 + (ABS(CHECKSUM(t.PAT_ENC_CSN_ID * 13)) % 200) AS varchar(4))
-             ELSE NULL
-        END,
-
-    -- City: choose from list
-    [Address 1: City] =
-        CASE ABS(CHECKSUM(t.PAT_ENC_CSN_ID * 11)) % 6
-            WHEN 0 THEN 'Houston'
-            WHEN 1 THEN 'Dallas'
-            WHEN 2 THEN 'Austin'
-            WHEN 3 THEN 'San Antonio'
-            WHEN 4 THEN 'Fort Worth'
-            WHEN 5 THEN 'El Paso'
-        END,
-
-    -- ZIP: valid 5-digit pattern, all fake
-    [Address 2: Zip] =
-        RIGHT(
-            '00000'
-            + CAST(70000 + (ABS(CHECKSUM(t.PAT_ENC_CSN_ID * 17)) % 999) AS varchar(5)),
-            5
-        ),
-
-    -- First name: from small realistic pool
-    PatientFirstName =
-        CASE ABS(CHECKSUM(t.PAT_ENC_CSN_ID * 19)) % 10
-            WHEN 0 THEN 'James'
-            WHEN 1 THEN 'Mary'
-            WHEN 2 THEN 'John'
-            WHEN 3 THEN 'Patricia'
-            WHEN 4 THEN 'Robert'
-            WHEN 5 THEN 'Linda'
-            WHEN 6 THEN 'Michael'
-            WHEN 7 THEN 'Barbara'
-            WHEN 8 THEN 'David'
-            WHEN 9 THEN 'Elizabeth'
-        END,
-
-    -- Last name: from small realistic pool
-    PatientLastName =
-        CASE ABS(CHECKSUM(t.PAT_ENC_CSN_ID * 23)) % 10
-            WHEN 0 THEN 'Smith'
-            WHEN 1 THEN 'Johnson'
-            WHEN 2 THEN 'Williams'
-            WHEN 3 THEN 'Brown'
-            WHEN 4 THEN 'Jones'
-            WHEN 5 THEN 'Garcia'
-            WHEN 6 THEN 'Miller'
-            WHEN 7 THEN 'Davis'
-            WHEN 8 THEN 'Rodriguez'
-            WHEN 9 THEN 'Martinez'
-        END,
-
-    -- Primary Email: based only on PAT_ENC_CSN_ID (no real email)
-    [Primary Email] =
-        'user'
-        + CAST(t.PAT_ENC_CSN_ID AS varchar(20))
-        + '@example.com'
-FROM [B_epic].[CDP_PAT_demograplics_Test] AS t;
-
-----------------------//-------------UPDATE MASKIING------------------
 UPDATE p
 SET
     -- DOB: between 1940 and ~2010
@@ -501,4 +404,46 @@ SET
               CAST(ABS(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_SSN2')) % 90 + 10 AS varchar(2)), 2)
         + '-' +
         RIGHT('0000' +
-              CAST(ABS(CHECKSUM(CONVERT(varchar(30), p.PAT_EN_
+              CAST(ABS(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_SSN3')) % 9000 + 1000 AS varchar(4)), 4),
+
+    -- MemberNumber
+    MemberNumber =
+        'MB' +
+        RIGHT(
+            '00000000'
+            + CAST(ABS(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_MB')) % 100000000 AS varchar(8)),
+            8
+        ),
+
+    -- Emergency contact
+    EmergencyContactName =
+        CASE ABS(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_ECN')) % 8
+            WHEN 0 THEN 'Anna Johnson'
+            WHEN 1 THEN 'Carlos Martinez'
+            WHEN 2 THEN 'Diane Smith'
+            WHEN 3 THEN 'Eric Brown'
+            WHEN 4 THEN 'Grace Davis'
+            WHEN 5 THEN 'Henry Wilson'
+            WHEN 6 THEN 'Irene Garcia'
+            WHEN 7 THEN 'Jason Miller'
+        END,
+
+    [HomePhone(relationship)] =
+        '555' +
+        RIGHT('0000000'
+              + CAST(ABS(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_RHP')) % 10000000 AS varchar(7)),
+              7),
+
+    [MobilePhone(relationship)] =
+        '555' +
+        RIGHT('0000000'
+              + CAST(ABS(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_RMP')) % 10000000 AS varchar(7)),
+              7),
+
+    [Email(relationship)] =
+        'contact'
+        + CAST(p.PAT_ENC_CSN_ID AS varchar(20))
+        + '@example.org'
+
+FROM [B_epic].[CDP_PAT_demograplics] AS p;
+
