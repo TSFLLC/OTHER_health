@@ -109,3 +109,10 @@ BEGIN
 END;
 GO
 
+
+=========================
+
+GRANT SELECT ON SCHEMA::SchemaA TO [DOMAIN\Dev_ReadWrite_Tera];
+GRANT SELECT ON SCHEMA::SchemaB TO [DOMAIN\Dev_ReadWrite_Tera];
+
+
