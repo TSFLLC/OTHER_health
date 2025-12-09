@@ -1,0 +1,117 @@
+----One-time static masking (existing data)
+
+UPDATE p
+SET
+    [DateOfBirth] = DATEFROMPARTS(
+                        1940 + ABS(CHECKSUM(p.[PAT_DM_CSN_ID])) % 60,
+                        1 + ABS(CHECKSUM(p.[PAT_DM_CSN_ID]*11)) % 12,
+                        1 + ABS(CHECKSUM(p.[PAT_DM_CSN_ID]*17)) % 28),
+    [ReligiousAffiliation] = 'Unknown',
+    [Address 1: Street 1]  = 'Street ' + CAST(p.[PAT_DM_CSN_ID] AS VARCHAR(20)),
+    [Address 1: Street 2]  = NULL,
+    [Address1: City]       = 'City ' + CAST(p.[PAT_DM_CSN_ID] % 1000 AS VARCHAR(4)),
+    [Address2: Zip]        = RIGHT(
+                                 '00000' +
+                                 CAST(ABS(CHECKSUM(p.[PAT_DM_CSN_ID])) % 99999 AS VARCHAR(5)),
+                                 5),
+    [PatientFirstName]     = 'FN' + RIGHT(
+                                      CAST(ABS(CHECKSUM(p.[PAT_DM_CSN_ID])) AS VARCHAR(10)),
+                                      4),
+    [PatientLastName]      = 'LN' + RIGHT(
+                                      CAST(ABS(CHECKSUM(p.[PAT_DM_CSN_ID]*7)) AS VARCHAR(10)),
+                                      4),
+    [Primary Email]        = 'user'
+                             + CAST(p.[PAT_DM_CSN_ID] AS VARCHAR(20))
+                             + '@example.com'
+FROM dbo.DimPatient p;
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+---2. Trigger to mask new / changed rows
+CREATE TRIGGER trg_DimPatient_Mask
+ON dbo.DimPatient
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    UPDATE p
+    SET
+        [DateOfBirth] = DATEFROMPARTS(
+                            1940 + ABS(CHECKSUM(i.[PAT_DM_CSN_ID])) % 60,
+                            1 + ABS(CHECKSUM(i.[PAT_DM_CSN_ID]*11)) % 12,
+                            1 + ABS(CHECKSUM(i.[PAT_DM_CSN_ID]*17)) % 28),
+        [ReligiousAffiliation] = 'Unknown',
+        [Address 1: Street 1]  = 'Street ' + CAST(i.[PAT_DM_CSN_ID] AS VARCHAR(20)),
+        [Address 1: Street 2]  = NULL,
+        [Address1: City]       = 'City ' + CAST(i.[PAT_DM_CSN_ID] % 1000 AS VARCHAR(4)),
+        [Address2: Zip]        = RIGHT(
+                                     '00000' +
+                                     CAST(ABS(CHECKSUM(i.[PAT_DM_CSN_ID])) % 99999 AS VARCHAR(5)),
+                                     5),
+        [PatientFirstName]     = 'FN' + RIGHT(
+                                          CAST(ABS(CHECKSUM(i.[PAT_DM_CSN_ID])) AS VARCHAR(10)),
+                                          4),
+        [PatientLastName]      = 'LN' + RIGHT(
+                                          CAST(ABS(CHECKSUM(i.[PAT_DM_CSN_ID]*7)) AS VARCHAR(10)),
+                                          4),
+        [Primary Email]        = 'user'
+                                 + CAST(i.[PAT_DM_CSN_ID] AS VARCHAR(20))
+                                 + '@example.com'
+    FROM dbo.DimPatient p
+    JOIN inserted i
+      ON p.[PAT_DM_CSN_ID] = i.[PAT_DM_CSN_ID];
+END;
+GO
+
+
+++++++++++++++++++++++++++++++++++++++++++++/////++++++++++
+OPTION 2 – No technical key at all (last resort)
+
+If your table truly has no key column, you can still mask, but:
+
+The trigger will join back on a combination of columns.
+
+If there are duplicate rows, they’ll all be masked the same – for DEV this is usually OK.
+
+Example using all non-masked columns ColA, ColB, ColC as a pseudo key:
+
+CREATE TRIGGER trg_DimPatient_Mask
+ON dbo.DimPatient
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    UPDATE p
+    SET
+        [DateOfBirth]        = DATEFROMPARTS(1950, 1, 1),
+        [ReligiousAffiliation] = 'Unknown',
+        [Address 1: Street 1]  = 'Masked Street',
+        [Address 1: Street 2]  = NULL,
+        [Address1: City]       = 'Masked City',
+        [Address2: Zip]        = '99999',
+        [PatientFirstName]     = 'MaskedFN',
+        [PatientLastName]      = 'MaskedLN',
+        [Primary Email]        = 'masked@example.com'
+    FROM dbo.DimPatient p
+    JOIN inserted i
+      ON p.ColA = i.ColA
+     AND p.ColB = i.ColB
+     AND p.ColC = i.ColC;   -- use the columns that define a “row” in your DW
+END;
+GO
+
+
+
+++++++++++++++++++++++++++++///////**********************
+
+What I recommend you tell your manager
+
+“We’re not adding a business primary key.
+We’re only using the existing warehouse key (or a technical identity) inside a trigger so that any data landing in DEV is immediately masked.
+The table design remains a typical data-warehouse dimension fact table; the masking logic is purely for security.”
+
+If you tell me the exact table name and which column is your DW key (e.g., PAT_DM_CSN_ID), I can paste back the script already customized so you can run it directly.
+
+
+
