@@ -59,13 +59,15 @@ GO
 
 USE [TERA];
 GO
-
-IF OBJECT_ID('[B_hipaattizer].[trg_Mask_sub_23e30401_a88f_4482_96c3_cdf57dbad4f2]', 'TR') IS NOT NULL
-    DROP TRIGGER [B_hipaattizer].[trg_Mask_sub_23e30401_a88f_4482_96c3_cdf57dbad4f2];
+USE [TERA];
 GO
 
-CREATE TRIGGER [B_hipaattizer].[trg_Mask_sub_23e30401_a88f_4482_96c3_cdf57dbad4f2]
-ON [B_hipaattizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2]
+IF OBJECT_ID('[B_hipaatizer].[trg_Mask_sub_23e30401_a88f_4482_96c3_cdf57dbad4f2]', 'TR') IS NOT NULL
+    DROP TRIGGER [B_hipaatizer].[trg_Mask_sub_23e30401_a88f_4482_96c3_cdf57dbad4f2];
+GO
+
+CREATE TRIGGER [B_hipaatizer].[trg_Mask_sub_23e30401_a88f_4482_96c3_cdf57dbad4f2]
+ON [B_hipaatizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2]
 AFTER INSERT
 AS
 BEGIN
@@ -75,34 +77,34 @@ BEGIN
     (
         SELECT
             sid,
-            ABS(CHECKSUM(sid        )) AS Seed1,
-            ABS(CHECKSUM(sid * 11   )) AS Seed2,
-            ABS(CHECKSUM(sid * 17   )) AS Seed3
+            ABS(CHECKSUM(sid, 1)) AS Seed1,
+            ABS(CHECKSUM(sid, 2)) AS Seed2,
+            ABS(CHECKSUM(sid, 3)) AS Seed3
         FROM inserted
     )
     UPDATE T
     SET
         first_name = CONCAT(
-                         'First',
-                         RIGHT('00000' + CAST(Seed1 % 100000 AS varchar(5)), 5)
-                     ),
+                             'First',
+                             RIGHT('00000' + CAST(Seed1 % 100000 AS varchar(5)), 5)
+                           ),
         last_name  = CONCAT(
-                         'Last',
-                         RIGHT('00000' + CAST(Seed2 % 100000 AS varchar(5)), 5)
-                     ),
+                             'Last',
+                             RIGHT('00000' + CAST(Seed2 % 100000 AS varchar(5)), 5)
+                           ),
         email      = CONCAT(
-                         'user',
-                         RIGHT('00000' + CAST(Seed3 % 100000 AS varchar(5)), 5),
-                         '@example.com'
-                     ),
+                             'user',
+                             RIGHT('00000' + CAST(Seed3 % 100000 AS varchar(5)), 5),
+                             '@example.com'
+                           ),
         phone      = CONCAT(
-                         '555-',
-                         RIGHT('000'   + CAST(Seed2 % 1000    AS varchar(3)), 3),
-                         '-',
-                         RIGHT('0000'  + CAST(Seed3 % 10000   AS varchar(4)), 4)
-                     )
-    FROM [B_hipaattizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2] T
-    JOIN MaskSeed S
+                             '555-',
+                             RIGHT('000'  + CAST(Seed2 % 1000  AS varchar(3)), 3),
+                             '-',
+                             RIGHT('0000' + CAST(Seed3 % 10000 AS varchar(4)), 4)
+                           )
+    FROM [B_hipaatizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2] AS T
+    JOIN MaskSeed AS S
         ON T.sid = S.sid;
 END;
 GO
