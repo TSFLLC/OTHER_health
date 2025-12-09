@@ -1,3 +1,9 @@
+SELECT *
+INTO dbo.MyPatientTable_backup_20251208
+FROM dbo.MyPatientTable;
+
+
+-----------------------------------------------///-------------------
 ----One-time static masking (existing data)
 
 UPDATE p
