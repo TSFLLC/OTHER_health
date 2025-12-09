@@ -1,0 +1,106 @@
+
+
+----Step 1 – (Optional but recommended) backup the table
+SELECT *
+INTO [B_hipaattizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2_backup]
+FROM [TERA].[B_hipaattizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2];
+
+---Step 2 – Run the static masking UPDATE
+USE [TERA];
+GO
+
+;WITH MaskSeed AS
+(
+    SELECT
+        sid,
+        ABS(CHECKSUM(sid        )) AS Seed1,
+        ABS(CHECKSUM(sid * 11   )) AS Seed2,
+        ABS(CHECKSUM(sid * 17   )) AS Seed3
+    FROM [B_hipaattizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2]
+)
+UPDATE T
+SET
+    -- fake first name: First12345
+    first_name = CONCAT(
+                     'First',
+                     RIGHT('00000' + CAST(Seed1 % 100000 AS varchar(5)), 5)
+                 ),
+
+    -- fake last name: Last67890
+    last_name  = CONCAT(
+                     'Last',
+                     RIGHT('00000' + CAST(Seed2 % 100000 AS varchar(5)), 5)
+                 ),
+
+    -- fake but valid-looking email: user12345@example.com
+    email      = CONCAT(
+                     'user',
+                     RIGHT('00000' + CAST(Seed3 % 100000 AS varchar(5)), 5),
+                     '@example.com'
+                 ),
+
+    -- fake US-style phone: 555-123-4567
+    phone      = CONCAT(
+                     '555-',
+                     RIGHT('000'   + CAST(Seed2 % 1000    AS varchar(3)), 3),
+                     '-',
+                     RIGHT('0000'  + CAST(Seed3 % 10000   AS varchar(4)), 4)
+                 )
+FROM [B_hipaattizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2] T
+JOIN MaskSeed S
+    ON T.sid = S.sid;
+GO
+
+
+----------===----------Trigger to mask future inserts----------------
+
+USE [TERA];
+GO
+
+IF OBJECT_ID('[B_hipaattizer].[trg_Mask_sub_23e30401_a88f_4482_96c3_cdf57dbad4f2]', 'TR') IS NOT NULL
+    DROP TRIGGER [B_hipaattizer].[trg_Mask_sub_23e30401_a88f_4482_96c3_cdf57dbad4f2];
+GO
+
+CREATE TRIGGER [B_hipaattizer].[trg_Mask_sub_23e30401_a88f_4482_96c3_cdf57dbad4f2]
+ON [B_hipaattizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2]
+AFTER INSERT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    ;WITH MaskSeed AS
+    (
+        SELECT
+            sid,
+            ABS(CHECKSUM(sid        )) AS Seed1,
+            ABS(CHECKSUM(sid * 11   )) AS Seed2,
+            ABS(CHECKSUM(sid * 17   )) AS Seed3
+        FROM inserted
+    )
+    UPDATE T
+    SET
+        first_name = CONCAT(
+                         'First',
+                         RIGHT('00000' + CAST(Seed1 % 100000 AS varchar(5)), 5)
+                     ),
+        last_name  = CONCAT(
+                         'Last',
+                         RIGHT('00000' + CAST(Seed2 % 100000 AS varchar(5)), 5)
+                     ),
+        email      = CONCAT(
+                         'user',
+                         RIGHT('00000' + CAST(Seed3 % 100000 AS varchar(5)), 5),
+                         '@example.com'
+                     ),
+        phone      = CONCAT(
+                         '555-',
+                         RIGHT('000'   + CAST(Seed2 % 1000    AS varchar(3)), 3),
+                         '-',
+                         RIGHT('0000'  + CAST(Seed3 % 10000   AS varchar(4)), 4)
+                     )
+    FROM [B_hipaattizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2] T
+    JOIN MaskSeed S
+        ON T.sid = S.sid;
+END;
+GO
+
