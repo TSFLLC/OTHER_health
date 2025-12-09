@@ -8,6 +8,8 @@ FROM [TERA].[B_hipaattizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2];
 ---Step 2 – Run the static masking UPDATE
 USE [TERA];
 GO
+USE [TERA];
+GO
 
 ;WITH MaskSeed AS
 (
@@ -46,11 +48,10 @@ SET
                      '-',
                      RIGHT('0000'  + CAST(Seed3 % 10000   AS varchar(4)), 4)
                  )
-FROM [B_hipaattizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2] T
-JOIN MaskSeed S
+FROM [B_hipaattizer].[sub_23e30401_a88f_4482_96c3_cdf57dbad4f2] AS T
+JOIN MaskSeed AS S
     ON T.sid = S.sid;
 GO
-
 
 ----------===----------Trigger to mask future inserts----------------
 
