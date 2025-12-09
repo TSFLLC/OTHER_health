@@ -447,3 +447,22 @@ SET
 
 FROM [B_epic].[CDP_PAT_demograplics] AS p;
 
+
+444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444
+
+'555'
++ RIGHT(
+      '0000000'
+      + CAST(
+            ABS(
+                CAST(
+                    CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_XX')
+                    AS BIGINT
+                )
+            ) % 10000000
+            AS varchar(7)
+        ),
+      7
+  )
+
+
