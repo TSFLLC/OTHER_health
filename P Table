@@ -464,5 +464,20 @@ FROM [B_epic].[CDP_PAT_demograplics] AS p;
         ),
       7
   )
++++++++++++++++++++++++++++++
+
+PatientLastName =
+    CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_LN') AS BIGINT)) % 10
+        WHEN 0 THEN 'Smith'
+        WHEN 1 THEN 'Johnson'
+        WHEN 2 THEN 'Williams'
+        WHEN 3 THEN 'Brown'
+        WHEN 4 THEN 'Jones'
+        WHEN 5 THEN 'Garcia'
+        WHEN 6 THEN 'Miller'
+        WHEN 7 THEN 'Davis'
+        WHEN 8 THEN 'Rodriguez'
+        WHEN 9 THEN 'Martinez'
+    END
 
 
