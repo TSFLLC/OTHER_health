@@ -1,0 +1,207 @@
+/*========================================================
+  ONE-TIME STATIC MASKING FOR DEV
+  TABLE : S_cdpdynamics.CDP_Appointments
+  SEED  : appointmentID
+=========================================================*/
+
+UPDATE A
+SET
+    -- Names
+    PatientFirstName = M.MaskedFirstName,
+    PatientLastName  = M.MaskedLastName,
+
+    -- MRN & IDs (numeric-style tokens)
+    MRN                    = M.MaskedMRN,
+    -- [appointmentID]     = M.MaskedAppointmentID,   -- keep real PK
+    VisitEncounterID       = M.MaskedVisitEncounterID,
+    [Visit/Epic Encounters ID] = M.MaskedEpicEncountersID,
+    [Epic Appointments ID]     = M.MaskedEpicAppointmentsID,
+    [Referral Code]        = M.MaskedReferralCode,
+
+    -- Address (no Address2)
+    PatientHomeAddress1      = M.MaskedAddress1,
+    PatientHomeAddressCity   = M.MaskedCity,
+    PatientHomeAddressZipcode= M.MaskedZip,
+
+    -- Phones (digits only, safe for varchar or numeric)
+    HomePhone   = M.MaskedHomePhone,
+    WorkPhone   = M.MaskedWorkPhone,
+    MobilePhone = M.MaskedMobilePhone,
+
+    -- Email
+    PatientEmailAddress = M.MaskedEmail,
+
+    -- DOB
+    PatientDateOfBirth = M.MaskedDOB,
+
+    -- Visit / Appointment clinical fields
+    VisitReasonCode        = M.MaskedVisitReasonCode,
+    VisitReasonDescription = M.MaskedVisitReasonDesc,
+    AppointmentDescription = M.MaskedApptDesc,
+    AppointmentTypeCode    = M.MaskedApptTypeCode,
+    AppointmentComment     = M.MaskedApptComment,
+
+    -- Insurance
+    PrimaryHealthPlanName   = M.MaskedPrimaryPlan,
+    SecondaryHealthPlanName = M.MaskedSecondaryPlan,
+
+    -- Dates / Times
+    [Referral Createdon date] = M.MaskedReferralCreatedOn,
+    EncounterDate             = M.MaskedEncounterDate,
+    AppointmentDate           = M.MaskedAppointmentDate,
+    AppointmentStartTime      = M.MaskedStartTime,
+    AppointmentEndTime        = M.MaskedEndTime
+FROM S_cdpdynamics.CDP_Appointments AS A
+CROSS APPLY
+(
+    -- Deterministic seed per row
+    SELECT ABS(CHECKSUM(A.[appointmentID])) AS Seed
+) AS S
+CROSS APPLY
+(
+    SELECT
+        ----------------------------------------------------------------
+        -- NAMES (text)
+        ----------------------------------------------------------------
+        CASE S.Seed % 10
+            WHEN 0 THEN 'James'
+            WHEN 1 THEN 'Mary'
+            WHEN 2 THEN 'Robert'
+            WHEN 3 THEN 'Patricia'
+            WHEN 4 THEN 'John'
+            WHEN 5 THEN 'Jennifer'
+            WHEN 6 THEN 'Michael'
+            WHEN 7 THEN 'Linda'
+            WHEN 8 THEN 'David'
+            ELSE 'Sarah'
+        END AS MaskedFirstName,
+
+        CASE (S.Seed / 10) % 10
+            WHEN 0 THEN 'Smith'
+            WHEN 1 THEN 'Johnson'
+            WHEN 2 THEN 'Brown'
+            WHEN 3 THEN 'Williams'
+            WHEN 4 THEN 'Jones'
+            WHEN 5 THEN 'Garcia'
+            WHEN 6 THEN 'Miller'
+            WHEN 7 THEN 'Davis'
+            WHEN 8 THEN 'Lopez'
+            ELSE 'Taylor'
+        END AS MaskedLastName,
+
+        ----------------------------------------------------------------
+        -- NUMERIC-LIKE IDs (safe for numeric or varchar)
+        ----------------------------------------------------------------
+        CAST(ABS(CHECKSUM(A.MRN,                     S.Seed)) AS BIGINT) AS MaskedMRN,
+        CAST(ABS(CHECKSUM(A.VisitEncounterID,        S.Seed)) AS BIGINT) AS MaskedVisitEncounterID,
+        CAST(ABS(CHECKSUM(A.[Visit/Epic Encounters ID], S.Seed)) AS BIGINT) AS MaskedEpicEncountersID,
+        CAST(ABS(CHECKSUM(A.[Epic Appointments ID],     S.Seed)) AS BIGINT) AS MaskedEpicAppointmentsID,
+        CAST(ABS(CHECKSUM(A.[Referral Code],         S.Seed)) AS BIGINT) AS MaskedReferralCode,
+
+        ----------------------------------------------------------------
+        -- ADDRESS (text) + ZIP numeric
+        ----------------------------------------------------------------
+        CASE S.Seed % 5
+            WHEN 0 THEN '123 Main St'
+            WHEN 1 THEN '456 Oak Ave'
+            WHEN 2 THEN '789 Pine Road'
+            WHEN 3 THEN '321 Maple Drive'
+            ELSE '654 Elm Street'
+        END AS MaskedAddress1,
+
+        CASE (S.Seed / 5) % 5
+            WHEN 0 THEN 'Houston'
+            WHEN 1 THEN 'Dallas'
+            WHEN 2 THEN 'Austin'
+            WHEN 3 THEN 'San Antonio'
+            ELSE 'Fort Worth'
+        END AS MaskedCity,
+
+        -- ZIP: 10000–99999 (numeric only)
+        CAST(10000 + (S.Seed % 90000) AS INT) AS MaskedZip,
+
+        ----------------------------------------------------------------
+        -- PHONES – DIGITS ONLY (no dashes)
+        ----------------------------------------------------------------
+        RIGHT('0000000000' +
+              CAST(ABS(CHECKSUM('H', S.Seed)) AS VARCHAR(10)), 10) AS MaskedHomePhone,
+
+        RIGHT('0000000000' +
+              CAST(ABS(CHECKSUM('W', S.Seed)) AS VARCHAR(10)), 10) AS MaskedWorkPhone,
+
+        RIGHT('0000000000' +
+              CAST(ABS(CHECKSUM('M', S.Seed)) AS VARCHAR(10)), 10) AS MaskedMobilePhone,
+
+        ----------------------------------------------------------------
+        -- EMAIL (text)
+        ----------------------------------------------------------------
+        LOWER(
+            CASE S.Seed % 10
+                WHEN 0 THEN 'james'
+                WHEN 1 THEN 'mary'
+                WHEN 2 THEN 'robert'
+                WHEN 3 THEN 'patricia'
+                WHEN 4 THEN 'john'
+                WHEN 5 THEN 'jennifer'
+                WHEN 6 THEN 'michael'
+                WHEN 7 THEN 'linda'
+                WHEN 8 THEN 'david'
+                ELSE 'sarah'
+            END + '.' +
+            CASE (S.Seed / 10) % 10
+                WHEN 0 THEN 'smith'
+                WHEN 1 THEN 'johnson'
+                WHEN 2 THEN 'brown'
+                WHEN 3 THEN 'williams'
+                WHEN 4 THEN 'jones'
+                WHEN 5 THEN 'garcia'
+                WHEN 6 THEN 'miller'
+                WHEN 7 THEN 'davis'
+                WHEN 8 THEN 'lopez'
+                ELSE 'taylor'
+            END + '@examplemail.com'
+        ) AS MaskedEmail,
+
+        ----------------------------------------------------------------
+        -- DOB (date)
+        ----------------------------------------------------------------
+        DATEFROMPARTS(
+            1940 + (S.Seed % 60),
+            1 + ((S.Seed / 100) % 12),
+            1 + ((S.Seed / 1000) % 28)
+        ) AS MaskedDOB,
+
+        ----------------------------------------------------------------
+        -- CODES (NUMERIC TOKENS) + TEXT DESCRIPTIONS
+        ----------------------------------------------------------------
+        CAST(1000 + (S.Seed % 9000) AS INT) AS MaskedVisitReasonCode,
+        'General consultation (masked)' AS MaskedVisitReasonDesc,
+
+        'Routine visit (masked)' AS MaskedApptDesc,
+        CAST(10 + (S.Seed % 90) AS INT) AS MaskedApptTypeCode,
+        'Masked clinical comment' AS MaskedApptComment,
+
+        ----------------------------------------------------------------
+        -- INSURANCE (text)
+        ----------------------------------------------------------------
+        'Health Plan A (masked)' AS MaskedPrimaryPlan,
+        'Health Plan B (masked)' AS MaskedSecondaryPlan,
+
+        ----------------------------------------------------------------
+        -- DATES / TIMES
+        ----------------------------------------------------------------
+        DATEADD(DAY, (S.Seed % 365),
+            ISNULL(A.[Referral Createdon date], DATEFROMPARTS(2018,1,1))
+        ) AS MaskedReferralCreatedOn,
+
+        DATEADD(DAY, (S.Seed % 365),
+            ISNULL(A.EncounterDate, DATEFROMPARTS(2018,1,1))
+        ) AS MaskedEncounterDate,
+
+        DATEADD(DAY, (S.Seed % 365),
+            ISNULL(A.AppointmentDate, DATEFROMPARTS(2018,1,1))
+        ) AS MaskedAppointmentDate,
+
+        TIMEFROMPARTS(8 + (S.Seed % 9), (S.Seed / 10) % 60, 0, 0, 0) AS MaskedStartTime,
+        TIMEFROMPARTS(9 + (S.Seed % 9), (S.Seed / 20) % 60, 0, 0, 0) AS MaskedEndTime
+) AS M;
