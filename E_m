@@ -1,0 +1,191 @@
+USE TERA;
+GO
+
+/*========================================================
+  STATIC MASKING FOR ENCOUNTER TABLE (CRITICAL COLUMNS)
+  TABLE : [YourSchema].[YourEncounterTable]
+  SEED  : EncounterId
+=========================================================*/
+
+UPDATE A
+SET
+    -- Critical identifiers
+    MRN                       = M.MaskedMRN,
+    EncounterId               = M.MaskedEncounterId,
+    [Encounter Line]          = M.MaskedEncounterLine,
+
+    -- Dates of care
+    EncounterDate             = M.MaskedEncounterDate,
+    AdmissionDateTime         = M.MaskedAdmissionDateTime,
+    DischargeDateTime         = M.MaskedDischargeDateTime,
+    [Epic Encounters Created On] = M.MaskedEpicCreatedOn,
+
+    -- Clinical reason / diagnosis / procedure
+    ReasonCode                = M.MaskedReasonCode,
+    VisitReason               = M.MaskedVisitReason,
+    [SNOMED CT]               = M.MaskedSNOMED,
+    DRG                       = M.MaskedDRG,
+    CPT                       = M.MaskedCPT,
+    [CPT Modifiers]           = M.MaskedCPTModifiers,
+    ICD10                     = M.MaskedICD10,
+
+    -- Insurance / membership
+    [Primary HealthPlanName]   = M.MaskedPrimaryPlanName,
+    [Primary MemberNumber]     = M.MaskedPrimaryMemberNumber,
+    [Primary GroupNumber]      = M.MaskedPrimaryGroupNumber,
+    [Secondary HealthPlanName] = M.MaskedSecondaryPlanName,
+    [Secondary MemberNumber]   = M.MaskedSecondaryMemberNumber,
+    [Secondary GroupNumber]    = M.MaskedSecondaryGroupNumber,
+    FinancialClass             = M.MaskedFinancialClass
+FROM [YourSchema].[YourEncounterTable] AS A
+CROSS APPLY
+(
+    SELECT ABS(CHECKSUM(A.EncounterId)) AS Seed
+) AS S
+CROSS APPLY
+(
+    SELECT
+        ----------------------------------------------------------------
+        -- NUMERIC TOKENS (safe for numeric or varchar columns)
+        ----------------------------------------------------------------
+        CAST(ABS(CHECKSUM('MRN', S.Seed)) AS BIGINT)       AS MaskedMRN,
+        CAST(ABS(CHECKSUM('EncId', S.Seed)) AS BIGINT)     AS MaskedEncounterId,
+        CAST(ABS(CHECKSUM('EncLine', S.Seed)) AS BIGINT)   AS MaskedEncounterLine,
+
+        -- ReasonCode, DRG, CPT, ICD10, FinancialClass as int-ish tokens
+        CAST(1000 + (S.Seed % 9000) AS INT)                AS MaskedReasonCode,
+        CAST(2000 + (S.Seed % 9000) AS INT)                AS MaskedDRG,
+        CAST(3000 + (S.Seed % 9000) AS INT)                AS MaskedCPT,
+        CAST(4000 + (S.Seed % 9000) AS INT)                AS MaskedCPTModifiers,
+        CAST(5000 + (S.Seed % 9000) AS INT)                AS MaskedICD10,
+        CAST(ABS(CHECKSUM('FinClass', S.Seed)) AS INT)     AS MaskedFinancialClass,
+
+        -- Member / group numbers – long numeric tokens
+        CAST(ABS(CHECKSUM('P-Mem', S.Seed)) AS BIGINT)     AS MaskedPrimaryMemberNumber,
+        CAST(ABS(CHECKSUM('P-Grp', S.Seed)) AS BIGINT)     AS MaskedPrimaryGroupNumber,
+        CAST(ABS(CHECKSUM('S-Mem', S.Seed)) AS BIGINT)     AS MaskedSecondaryMemberNumber,
+        CAST(ABS(CHECKSUM('S-Grp', S.Seed)) AS BIGINT)     AS MaskedSecondaryGroupNumber,
+
+        ----------------------------------------------------------------
+        -- TEXT FIELDS (realistic but generic)
+        ----------------------------------------------------------------
+        -- VisitReason text
+        'General consultation (masked)'                   AS MaskedVisitReason,
+
+        -- SNOMED – keep as generic label so devs see “it is a code”
+        'SNOMED_MASKED_' + CAST(S.Seed % 100000 AS VARCHAR(6)) AS MaskedSNOMED,
+
+        -- Plan names
+        'Health Plan A (masked)'                         AS MaskedPrimaryPlanName,
+        'Health Plan B (masked)'                         AS MaskedSecondaryPlanName,
+
+        ----------------------------------------------------------------
+        -- DATES / TIMES – deterministic date shift
+        ----------------------------------------------------------------
+        DATEADD(DAY, (S.Seed % 365),
+                ISNULL(A.EncounterDate, CAST('2018-01-01' AS DATE))
+        ) AS MaskedEncounterDate,
+
+        DATEADD(DAY, (S.Seed % 365),
+                ISNULL(A.AdmissionDateTime, CAST('2018-01-01' AS DATETIME2))
+        ) AS MaskedAdmissionDateTime,
+
+        DATEADD(DAY, (S.Seed % 365),
+                ISNULL(A.DischargeDateTime, CAST('2018-01-02' AS DATETIME2))
+        ) AS MaskedDischargeDateTime,
+
+        DATEADD(DAY, (S.Seed % 365),
+                ISNULL([A].[Epic Encounters Created On], CAST('2018-01-01' AS DATETIME2))
+        ) AS MaskedEpicCreatedOn
+) AS M;
+GO
+
+===========================TRIGGER=====================================================
+
+USE TERA;
+GO
+
+IF OBJECT_ID('[YourSchema].[trg_Encounter_Masking]', 'TR') IS NOT NULL
+    DROP TRIGGER [YourSchema].[trg_Encounter_Masking];
+GO
+
+CREATE TRIGGER [YourSchema].[trg_Encounter_Masking]
+ON [YourSchema].[YourEncounterTable]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    ;WITH ToMask AS
+    (
+        SELECT A.*
+        FROM [YourSchema].[YourEncounterTable] A
+        INNER JOIN inserted i
+            ON A.EncounterId = i.EncounterId   -- join on key
+    )
+    UPDATE A
+    SET
+        MRN                       = M.MaskedMRN,
+        EncounterId               = M.MaskedEncounterId,
+        [Encounter Line]          = M.MaskedEncounterLine,
+        EncounterDate             = M.MaskedEncounterDate,
+        AdmissionDateTime         = M.MaskedAdmissionDateTime,
+        DischargeDateTime         = M.MaskedDischargeDateTime,
+        [Epic Encounters Created On] = M.MaskedEpicCreatedOn,
+        ReasonCode                = M.MaskedReasonCode,
+        VisitReason               = M.MaskedVisitReason,
+        [SNOMED CT]               = M.MaskedSNOMED,
+        DRG                       = M.MaskedDRG,
+        CPT                       = M.MaskedCPT,
+        [CPT Modifiers]           = M.MaskedCPTModifiers,
+        ICD10                     = M.MaskedICD10,
+        [Primary HealthPlanName]   = M.MaskedPrimaryPlanName,
+        [Primary MemberNumber]     = M.MaskedPrimaryMemberNumber,
+        [Primary GroupNumber]      = M.MaskedPrimaryGroupNumber,
+        [Secondary HealthPlanName] = M.MaskedSecondaryPlanName,
+        [Secondary MemberNumber]   = M.MaskedSecondaryMemberNumber,
+        [Secondary GroupNumber]    = M.MaskedSecondaryGroupNumber,
+        FinancialClass             = M.MaskedFinancialClass
+    FROM ToMask A
+    CROSS APPLY
+    (
+        SELECT ABS(CHECKSUM(A.EncounterId)) AS Seed
+    ) AS S
+    CROSS APPLY
+    (
+        SELECT
+            CAST(ABS(CHECKSUM('MRN', S.Seed)) AS BIGINT)       AS MaskedMRN,
+            CAST(ABS(CHECKSUM('EncId', S.Seed)) AS BIGINT)     AS MaskedEncounterId,
+            CAST(ABS(CHECKSUM('EncLine', S.Seed)) AS BIGINT)   AS MaskedEncounterLine,
+            CAST(1000 + (S.Seed % 9000) AS INT)                AS MaskedReasonCode,
+            CAST(2000 + (S.Seed % 9000) AS INT)                AS MaskedDRG,
+            CAST(3000 + (S.Seed % 9000) AS INT)                AS MaskedCPT,
+            CAST(4000 + (S.Seed % 9000) AS INT)                AS MaskedCPTModifiers,
+            CAST(5000 + (S.Seed % 9000) AS INT)                AS MaskedICD10,
+            CAST(ABS(CHECKSUM('FinClass', S.Seed)) AS INT)     AS MaskedFinancialClass,
+            CAST(ABS(CHECKSUM('P-Mem', S.Seed)) AS BIGINT)     AS MaskedPrimaryMemberNumber,
+            CAST(ABS(CHECKSUM('P-Grp', S.Seed)) AS BIGINT)     AS MaskedPrimaryGroupNumber,
+            CAST(ABS(CHECKSUM('S-Mem', S.Seed)) AS BIGINT)     AS MaskedSecondaryMemberNumber,
+            CAST(ABS(CHECKSUM('S-Grp', S.Seed)) AS BIGINT)     AS MaskedSecondaryGroupNumber,
+            'General consultation (masked)'                    AS MaskedVisitReason,
+            'SNOMED_MASKED_' + CAST(S.Seed % 100000 AS VARCHAR(6)) AS MaskedSNOMED,
+            'Health Plan A (masked)'                           AS MaskedPrimaryPlanName,
+            'Health Plan B (masked)'                           AS MaskedSecondaryPlanName,
+            DATEADD(DAY, (S.Seed % 365),
+                    ISNULL(A.EncounterDate, CAST('2018-01-01' AS DATE))
+            ) AS MaskedEncounterDate,
+            DATEADD(DAY, (S.Seed % 365),
+                    ISNULL(A.AdmissionDateTime, CAST('2018-01-01' AS DATETIME2))
+            ) AS MaskedAdmissionDateTime,
+            DATEADD(DAY, (S.Seed % 365),
+                    ISNULL(A.DischargeDateTime, CAST('2018-01-02' AS DATETIME2))
+            ) AS MaskedDischargeDateTime,
+            DATEADD(DAY, (S.Seed % 365),
+                    ISNULL([A].[Epic Encounters Created On], CAST('2018-01-01' AS DATETIME2))
+            ) AS MaskedEpicCreatedOn
+    ) AS M;
+END;
+GO
+
+
+
