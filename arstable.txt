@@ -1,0 +1,269 @@
+USE [TERA];
+GO
+
+BEGIN TRAN;
+
+;WITH x AS
+(
+    SELECT
+        s.Provid,
+        s.Line,
+        s.Identityid,
+        s.Mpiidfromdate,
+        s.Mpiidtodate,
+        -- deterministic day shift per provider (range 1..1200 days)
+        DayShift = (ABS(CHECKSUM(CONVERT(varchar(50), s.Provid))) % 1200) + 1
+    FROM [B_epic].[IdentitySerId] s
+)
+UPDATE s
+SET
+    -- Mask Identityid: stable, numeric-ish token (string) based on Provid + original Identityid
+    Identityid =
+        CASE
+            WHEN x.Identityid IS NULL OR LTRIM(RTRIM(CONVERT(varchar(100), x.Identityid))) = '' THEN x.Identityid
+            ELSE CONCAT('ID', ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), x.Provid), '|', CONVERT(varchar(100), x.Identityid)))) % 1000000000)
+        END,
+
+    -- Shift dates (keep NULLs)
+    Mpiidfromdate =
+        CASE
+            WHEN x.Mpiidfromdate IS NULL THEN NULL
+            ELSE DATEADD(DAY, x.DayShift, x.Mpiidfromdate)
+        END,
+
+    Mpiidtodate =
+        CASE
+            WHEN x.Mpiidtodate IS NULL THEN NULL
+            ELSE DATEADD(DAY, x.DayShift, x.Mpiidtodate)
+        END
+FROM [B_epic].[IdentitySerId] s
+JOIN x
+  ON s.Provid = x.Provid
+ AND s.Line   = x.Line;   -- use Provid+Line since Line exists and helps target rows
+
+COMMIT TRAN;
+GO
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+USE [TERA];
+GO
+
+CREATE OR ALTER TRIGGER [B_epic].[trg_IdentitySerId_Mask]
+ON [B_epic].[IdentitySerId]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- avoid recursion
+    IF TRIGGER_NESTLEVEL() > 1 RETURN;
+
+    ;WITH i AS
+    (
+        SELECT
+            ins.Provid,
+            ins.Line,
+            ins.Identityid,
+            ins.Mpiidfromdate,
+            ins.Mpiidtodate,
+            DayShift = (ABS(CHECKSUM(CONVERT(varchar(50), ins.Provid))) % 1200) + 1
+        FROM inserted ins
+    )
+    UPDATE tgt
+    SET
+        Identityid =
+            CASE
+                WHEN i.Identityid IS NULL OR LTRIM(RTRIM(CONVERT(varchar(100), i.Identityid))) = '' THEN i.Identityid
+                ELSE CONCAT('ID', ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), i.Provid), '|', CONVERT(varchar(100), i.Identityid)))) % 1000000000)
+            END,
+
+        Mpiidfromdate =
+            CASE
+                WHEN i.Mpiidfromdate IS NULL THEN NULL
+                ELSE DATEADD(DAY, i.DayShift, i.Mpiidfromdate)
+            END,
+
+        Mpiidtodate =
+            CASE
+                WHEN i.Mpiidtodate IS NULL THEN NULL
+                ELSE DATEADD(DAY, i.DayShift, i.Mpiidtodate)
+            END
+    FROM [B_epic].[IdentitySerId] tgt
+    JOIN i
+      ON tgt.Provid = i.Provid
+     AND tgt.Line   = i.Line;
+END;
+GO
+
+
+
+USE [TERA];
+GO
+
+BEGIN TRAN;
+
+-- Mask SSN: keep last 4 if possible, else mask fully
+UPDATE s
+SET
+    Ssn = CASE
+            WHEN s.Ssn IS NULL OR LTRIM(RTRIM(CONVERT(varchar(50), s.Ssn))) = '' THEN s.Ssn
+            ELSE
+                'XXX-XX-' +
+                RIGHT(REPLACE(REPLACE(REPLACE(CONVERT(varchar(50), s.Ssn), '-', ''), ' ', ''), '.', ''), 4)
+          END,
+
+    -- Mask Email: keep domain, randomize local part to look realistic
+    Email = CASE
+              WHEN s.Email IS NULL OR LTRIM(RTRIM(CONVERT(varchar(320), s.Email))) = '' THEN s.Email
+              WHEN CHARINDEX('@', CONVERT(varchar(320), s.Email)) > 1 THEN
+                   CONCAT('user', ABS(CHECKSUM(s.Provid)) % 100000, '@',
+                          SUBSTRING(CONVERT(varchar(320), s.Email),
+                                    CHARINDEX('@', CONVERT(varchar(320), s.Email)) + 1, 320))
+              ELSE
+                   CONCAT('user', ABS(CHECKSUM(s.Provid)) % 100000, '@example.com')
+            END,
+
+    -- Mask DEA: keep last 3 if possible, else mask fully
+    Deanumber = CASE
+                  WHEN s.Deanumber IS NULL OR LTRIM(RTRIM(CONVERT(varchar(50), s.Deanumber))) = '' THEN s.Deanumber
+                  ELSE
+                       CONCAT('XX', RIGHT(REPLACE(REPLACE(CONVERT(varchar(50), s.Deanumber), ' ', ''), '-', ''), 3))
+                END
+FROM [B_epic].[ClaritySer] s;
+
+-- Optional: quick sample check
+-- SELECT TOP 50 Provid, Ssn, Email, Deanumber FROM [B_epic].[ClaritySer] ORDER BY Provid;
+
+COMMIT TRAN;
+GO
+
+
+
++++++++++++++++++++trigger+++++++++++++++++++++++++++++++++++++++
+USE [TERA];
+GO
+
+CREATE OR ALTER TRIGGER [B_epic].[trg_ClaritySer_Mask_PII]
+ON [B_epic].[ClaritySer]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Avoid recursive trigger firing
+    IF TRIGGER_NESTLEVEL() > 1 RETURN;
+
+    ;WITH src AS
+    (
+        SELECT
+            i.Provid,
+            i.Ssn,
+            i.Email,
+            i.Deanumber
+        FROM inserted i
+    )
+    UPDATE s
+    SET
+        Ssn = CASE
+                WHEN src.Ssn IS NULL OR LTRIM(RTRIM(CONVERT(varchar(50), src.Ssn))) = '' THEN src.Ssn
+                ELSE
+                    'XXX-XX-' +
+                    RIGHT(REPLACE(REPLACE(REPLACE(CONVERT(varchar(50), src.Ssn), '-', ''), ' ', ''), '.', ''), 4)
+              END,
+
+        Email = CASE
+                  WHEN src.Email IS NULL OR LTRIM(RTRIM(CONVERT(varchar(320), src.Email))) = '' THEN src.Email
+                  WHEN CHARINDEX('@', CONVERT(varchar(320), src.Email)) > 1 THEN
+                       CONCAT('user', ABS(CHECKSUM(src.Provid)) % 100000, '@',
+                              SUBSTRING(CONVERT(varchar(320), src.Email),
+                                        CHARINDEX('@', CONVERT(varchar(320), src.Email)) + 1, 320))
+                  ELSE
+                       CONCAT('user', ABS(CHECKSUM(src.Provid)) % 100000, '@example.com')
+                END,
+
+        Deanumber = CASE
+                      WHEN src.Deanumber IS NULL OR LTRIM(RTRIM(CONVERT(varchar(50), src.Deanumber))) = '' THEN src.Deanumber
+                      ELSE
+                           CONCAT('XX', RIGHT(REPLACE(REPLACE(CONVERT(varchar(50), src.Deanumber), ' ', ''), '-', ''), 3))
+                    END
+    FROM [B_epic].[ClaritySer] s
+    JOIN src ON src.Provid = s.Provid;
+END;
+GO
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+USE [TERA];
+GO
+
+BEGIN TRAN;
+
+UPDATE v
+SET v.Csn =
+    CASE
+        WHEN v.Csn IS NULL THEN NULL
+        ELSE
+        (
+            /* Deterministic token (BIGINT) derived from SHA2_256(CSN) */
+            SELECT
+                CASE
+                    WHEN CAST(SUBSTRING(HASHBYTES('SHA2_256', CONVERT(varchar(50), v.Csn)), 1, 8) AS bigint) < 0
+                    THEN -CAST(SUBSTRING(HASHBYTES('SHA2_256', CONVERT(varchar(50), v.Csn)), 1, 8) AS bigint)
+                    ELSE  CAST(SUBSTRING(HASHBYTES('SHA2_256', CONVERT(varchar(50), v.Csn)), 1, 8) AS bigint)
+                END
+        )
+    END
+FROM [B_epic].[VTeraAvailibility] v;
+
+COMMIT TRAN;
+GO
+
+
+--------------------------trigger---------------------------------
+
+USE [TERA];
+GO
+
+CREATE OR ALTER TRIGGER [B_epic].[trg_VTeraAvailibility_Mask_CSN]
+ON [B_epic].[VTeraAvailibility]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Prevent recursion
+    IF TRIGGER_NESTLEVEL() > 1 RETURN;
+
+    ;WITH i AS
+    (
+        SELECT
+            Providerid,
+            Slotbegindatetime,
+            Slotenddatetime,
+            Apptnumber,
+            Csn
+        FROM inserted
+        WHERE Csn IS NOT NULL
+    )
+    UPDATE tgt
+    SET tgt.Csn =
+        (
+            SELECT
+                CASE
+                    WHEN CAST(SUBSTRING(HASHBYTES('SHA2_256', CONVERT(varchar(50), i.Csn)), 1, 8) AS bigint) < 0
+                    THEN -CAST(SUBSTRING(HASHBYTES('SHA2_256', CONVERT(varchar(50), i.Csn)), 1, 8) AS bigint)
+                    ELSE  CAST(SUBSTRING(HASHBYTES('SHA2_256', CONVERT(varchar(50), i.Csn)), 1, 8) AS bigint)
+                END
+        )
+    FROM [B_epic].[VTeraAvailibility] tgt
+    JOIN i
+      ON tgt.Providerid = i.Providerid
+     AND tgt.Slotbegindatetime = i.Slotbegindatetime
+     AND tgt.Slotenddatetime   = i.Slotenddatetime
+     AND ISNULL(tgt.Apptnumber, -1) = ISNULL(i.Apptnumber, -1);
+END;
+GO
+
+
