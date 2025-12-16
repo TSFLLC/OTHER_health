@@ -47,5 +47,24 @@ CITY
 STATE_C
 ZIP
 
+---------------------------------------------------
+
+CREATE TABLE S_hipaatizer.sub_unified (
+    sid CHAR(80) PRIMARY KEY,
+    wfid CHAR(80),
+    form_name VARCHAR(255),
+    form_group VARCHAR(255),
+    ip_address NVARCHAR(45),
+    created_at DATETIME2,
+    account_name VARCHAR(255),
+ /* START MASK THIS FIELD */
+    first_name VARCHAR(MAX),
+    last_name VARCHAR(MAX),
+    full_name VARCHAR(MAX),
+    email VARCHAR(MAX),
+    phone VARCHAR(MAX)
+ /* END MASK THIS FIELD */
+);
+
 
 
