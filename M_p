@@ -1,0 +1,51 @@
+SELECT TOP (1000) [PAT_ID]
+      ,[PAT_MRN_ID]
+      ,[PATIENTLASTNAME]
+      ,[PATIENTMIDDLENAME]
+      ,[PATIENTFIRSTNAME]
+      ,[SEX_C]
+      ,[ADD_LINE_1]
+      ,[ADD_LINE_2]
+      ,[CITY]
+      ,[STATE_C]
+      ,[COUNTY_C]
+      ,[ZIP]
+      ,[HOME_PHONE]
+      ,[WORK_PHONE]
+      ,[EMAIL_ADDRESS]
+      ,[LANGUAGE_C]
+      ,[RELIGION_C]
+      ,[MARITAL_STATUS_C]
+      ,[ETHNIC_GROUP_C]
+      ,[BIRTH_DATE]
+      ,[SSN]
+      ,[PAT_STATUS]
+      ,[TMP_ADDR_START_DT]
+      ,[TMP_ADDR_END_DT]
+      ,[TMP_ADDR_LINE_1]
+      ,[TMP_ADDR_LINE_2]
+      ,[TMP_CITY]
+      ,[TMP_STATE_C]
+      ,[TMP_ZIP]
+      ,[PAT_NAME_SUFFIX_C]
+      ,[CUR_PCP_PROV_ID]
+      ,[EMPY_STATUS_C]
+      ,[REC_CREATE_DATE]
+      ,[UPDATE_DATE]
+      ,[SourceID]
+  FROM [TERA].[B_epic].[Patient]
+------------------------------------------------------
+  PAT_MRN_ID
+SSN
+PATIENTFIRSTNAME
+PATIENTLASTNAME
+BIRTH_DATE
+HOME_PHONE
+EMAIL_ADDRESS
+ADD_LINE_1
+CITY
+STATE_C
+ZIP
+
+
+
