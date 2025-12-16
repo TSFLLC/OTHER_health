@@ -1,70 +1,160 @@
-SELECT TOP (1000) [PAT_ID]
-      ,[PAT_MRN_ID]
-      ,[PATIENTLASTNAME]
-      ,[PATIENTMIDDLENAME]
-      ,[PATIENTFIRSTNAME]
-      ,[SEX_C]
-      ,[ADD_LINE_1]
-      ,[ADD_LINE_2]
-      ,[CITY]
-      ,[STATE_C]
-      ,[COUNTY_C]
-      ,[ZIP]
-      ,[HOME_PHONE]
-      ,[WORK_PHONE]
-      ,[EMAIL_ADDRESS]
-      ,[LANGUAGE_C]
-      ,[RELIGION_C]
-      ,[MARITAL_STATUS_C]
-      ,[ETHNIC_GROUP_C]
-      ,[BIRTH_DATE]
-      ,[SSN]
-      ,[PAT_STATUS]
-      ,[TMP_ADDR_START_DT]
-      ,[TMP_ADDR_END_DT]
-      ,[TMP_ADDR_LINE_1]
-      ,[TMP_ADDR_LINE_2]
-      ,[TMP_CITY]
-      ,[TMP_STATE_C]
-      ,[TMP_ZIP]
-      ,[PAT_NAME_SUFFIX_C]
-      ,[CUR_PCP_PROV_ID]
-      ,[EMPY_STATUS_C]
-      ,[REC_CREATE_DATE]
-      ,[UPDATE_DATE]
-      ,[SourceID]
-  FROM [TERA].[B_epic].[Patient]
-------------------------------------------------------
-  PAT_MRN_ID
-SSN
-PATIENTFIRSTNAME
-PATIENTLASTNAME
-BIRTH_DATE
-HOME_PHONE
-EMAIL_ADDRESS
-ADD_LINE_1
-CITY
-STATE_C
-ZIP
 
----------------------------------------------------
 
-CREATE TABLE S_hipaatizer.sub_unified (
-    sid CHAR(80) PRIMARY KEY,
-    wfid CHAR(80),
-    form_name VARCHAR(255),
-    form_group VARCHAR(255),
-    ip_address NVARCHAR(45),
-    created_at DATETIME2,
-    account_name VARCHAR(255),
- /* START MASK THIS FIELD */
-    first_name VARCHAR(MAX),
-    last_name VARCHAR(MAX),
-    full_name VARCHAR(MAX),
-    email VARCHAR(MAX),
-    phone VARCHAR(MAX)
- /* END MASK THIS FIELD */
-);
+++++++++++++++++++++++++++++////+++++++++++++++++++++++++++++++++++++++
+
+USE TERA;
+GO
+
+ALTER TABLE [B_epic].[Patient]
+ALTER COLUMN PAT_MRN_ID
+ADD MASKED WITH (FUNCTION = 'partial(2,"XXXXXX",2)');
+GO
+
+ALTER TABLE [B_epic].[Patient]
+ALTER COLUMN SSN
+ADD MASKED WITH (FUNCTION = 'partial(0,"XXX-XX-XXXX",0)');
+GO
+
+ALTER TABLE [B_epic].[Patient]
+ALTER COLUMN PATIENTFIRSTNAME
+ADD MASKED WITH (FUNCTION = 'partial(1,"XXXX",0)');
+GO
+
+ALTER TABLE [B_epic].[Patient]
+ALTER COLUMN PATIENTLASTNAME
+ADD MASKED WITH (FUNCTION = 'partial(1,"XXXX",0)');
+GO
+
+ALTER TABLE [B_epic].[Patient]
+ALTER COLUMN BIRTH_DATE
+ADD MASKED WITH (FUNCTION = 'default()');
+GO
+
+ALTER TABLE [B_epic].[Patient]
+ALTER COLUMN HOME_PHONE
+ADD MASKED WITH (FUNCTION = 'partial(0,"XXX-XXX-XXXX",0)');
+GO
+
+ALTER TABLE [B_epic].[Patient]
+ALTER COLUMN EMAIL_ADDRESS
+ADD MASKED WITH (FUNCTION = 'email()');
+GO
+
+ALTER TABLE [B_epic].[Patient]
+ALTER COLUMN ADD_LINE_1
+ADD MASKED WITH (FUNCTION = 'partial(5,"XXXXX",0)');
+GO
+
+ALTER TABLE [B_epic].[Patient]
+ALTER COLUMN CITY
+ADD MASKED WITH (FUNCTION = 'partial(1,"XXXX",0)');
+GO
+
+ALTER TABLE [B_epic].[Patient]
+ALTER COLUMN STATE_C
+ADD MASKED WITH (FUNCTION = 'default()');
+GO
+
+ALTER TABLE [B_epic].[Patient]
+ALTER COLUMN ZIP
+ADD MASKED WITH (FUNCTION = 'partial(0,"XXXXX",0)');
+GO
+
+
+++++++++++++++++++Drop masking----------------------------------
+USE TERA;
+GO
+
+ALTER TABLE [B_epic].[Patient] ALTER COLUMN [PAT_MRN_ID]       DROP MASKED;
+ALTER TABLE [B_epic].[Patient] ALTER COLUMN [SSN]              DROP MASKED;
+ALTER TABLE [B_epic].[Patient] ALTER COLUMN [PATIENTFIRSTNAME] DROP MASKED;
+ALTER TABLE [B_epic].[Patient] ALTER COLUMN [PATIENTLASTNAME]  DROP MASKED;
+ALTER TABLE [B_epic].[Patient] ALTER COLUMN [BIRTH_DATE]       DROP MASKED;
+ALTER TABLE [B_epic].[Patient] ALTER COLUMN [HOME_PHONE]       DROP MASKED;
+ALTER TABLE [B_epic].[Patient] ALTER COLUMN [EMAIL_ADDRESS]    DROP MASKED;
+ALTER TABLE [B_epic].[Patient] ALTER COLUMN [ADD_LINE_1]       DROP MASKED;
+ALTER TABLE [B_epic].[Patient] ALTER COLUMN [CITY]             DROP MASKED;
+ALTER TABLE [B_epic].[Patient] ALTER COLUMN [STATE_C]          DROP MASKED;
+ALTER TABLE [B_epic].[Patient] ALTER COLUMN [ZIP]              DROP MASKED;
+GO
+
+----------------//check what colunm is currently mask-------------------
+SELECT
+    t.name  AS TableName,
+    c.name  AS ColumnName,
+    c.is_masked,
+    mc.masking_function
+FROM sys.tables t
+JOIN sys.columns c
+    ON c.object_id = t.object_id
+LEFT JOIN sys.masked_columns mc
+    ON mc.object_id = c.object_id
+   AND mc.column_id = c.column_id
+WHERE t.object_id = OBJECT_ID('[B_epic].[Patient]')
+  AND c.is_masked = 1
+ORDER BY c.column_id;
+
++++++++++++++++++++++//+++++++++++++++++++++++++++++++++++++++++++++++++
+GRANT UNMASK TO [YourLoginOrRole];
+GO
++++++++++++++++++++++++Safe rollback ++++++++++++++++++++++++++++++++++++++++++++++++
+USE TERA;
+GO
+
+DECLARE @SchemaName sysname = N'B_epic';
+DECLARE @TableName  sysname = N'Patient';
+
+DECLARE @sql nvarchar(max) = N'';
+
+;WITH MaskedCols AS
+(
+    SELECT
+        s.name  AS SchemaName,
+        t.name  AS TableName,
+        c.name  AS ColumnName
+    FROM sys.tables t
+    JOIN sys.schemas s
+        ON s.schema_id = t.schema_id
+    JOIN sys.columns c
+        ON c.object_id = t.object_id
+    WHERE s.name = @SchemaName
+      AND t.name = @TableName
+      AND c.is_masked = 1
+      AND c.name IN
+      (
+        N'PAT_MRN_ID',
+        N'SSN',
+        N'PATIENTFIRSTNAME',
+        N'PATIENTLASTNAME',
+        N'BIRTH_DATE',
+        N'HOME_PHONE',
+        N'EMAIL_ADDRESS',
+        N'ADD_LINE_1',
+        N'CITY',
+        N'STATE_C',
+        N'ZIP'
+      )
+)
+SELECT @sql +=
+    N'ALTER TABLE ' + QUOTENAME(SchemaName) + N'.' + QUOTENAME(TableName) +
+    N' ALTER COLUMN ' + QUOTENAME(ColumnName) + N' DROP MASKED;' + CHAR(13) + CHAR(10)
+FROM MaskedCols
+ORDER BY ColumnName;
+
+IF @sql = N''
+BEGIN
+    PRINT 'No masking found for the specified columns on ' + QUOTENAME(@SchemaName) + '.' + QUOTENAME(@TableName) + '. Nothing to rollback.';
+END
+ELSE
+BEGIN
+    PRINT 'Running rollback script:';
+    PRINT @sql;
+    EXEC sp_executesql @sql;
+    PRINT 'Rollback completed.';
+END
+GO
+
+
 
 
 
