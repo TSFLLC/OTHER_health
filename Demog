@@ -1,0 +1,603 @@
+SELECT *
+INTO [B_epic].[CDP_PAT_demograplics_backup_fullmask_20251209]
+FROM [B_epic].[CDP_PAT_demograplics];
+
++++++++++++++++++++++++++++++++++++++++////+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+UPDATE p
+SET
+    /* -------- DOB -------- */
+    DateofBirth =
+        DATEADD(
+            DAY,
+            ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID)) AS BIGINT)) % 25550,
+            CONVERT(date, '1940-01-01')
+        ),
+
+    /* -------- OPTIONAL: RELIGION (remove if you don’t want to touch it) -------- */
+    ReligiousAffiliation =
+        CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_REL') AS BIGINT)) % 6
+            WHEN 0 THEN 'Unknown'
+            WHEN 1 THEN 'Christian'
+            WHEN 2 THEN 'Muslim'
+            WHEN 3 THEN 'Jewish'
+            WHEN 4 THEN 'Hindu'
+            WHEN 5 THEN 'Other'
+        END,
+
+    /* -------- ADDRESSES -------- */
+    [Address 1: Street 1] =
+        CAST(
+            100 + (
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_S1') AS BIGINT)) % 9000
+            ) AS varchar(5)
+        )
+        + ' ' +
+        CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_S1NAME') AS BIGINT)) % 5
+            WHEN 0 THEN 'Oak St'
+            WHEN 1 THEN 'Maple Ave'
+            WHEN 2 THEN 'Pine Dr'
+            WHEN 3 THEN 'Cedar Ln'
+            WHEN 4 THEN 'Elm St'
+        END,
+
+    [Address 2: Street 2] =
+        CASE
+            WHEN ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_APTFLAG') AS BIGINT)) % 3 = 0
+                THEN 'Apt ' +
+                     CAST(
+                         1 + (
+                             ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_APT') AS BIGINT)) % 200
+                         ) AS varchar(4)
+                     )
+            ELSE 'Suite ' +
+                 CAST(
+                     1 + (
+                         ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_SUITE') AS BIGINT)) % 300
+                     ) AS varchar(4)
+                 )
+        END,
+
+    [Address 1: City] =
+        CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_CITY') AS BIGINT)) % 6
+            WHEN 0 THEN 'Houston'
+            WHEN 1 THEN 'Dallas'
+            WHEN 2 THEN 'Austin'
+            WHEN 3 THEN 'San Antonio'
+            WHEN 4 THEN 'Fort Worth'
+            WHEN 5 THEN 'El Paso'
+        END,
+
+    [Address 1: Zip] =
+        RIGHT(
+            '00000' +
+            CAST(
+                70000 + (
+                    ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_ZIP1') AS BIGINT)) % 999
+                ) AS varchar(5)
+            ),
+            5
+        ),
+
+    /* -------- NAMES -------- */
+    PatientFirstName =
+        CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_FN') AS BIGINT)) % 10
+            WHEN 0 THEN 'James'
+            WHEN 1 THEN 'Mary'
+            WHEN 2 THEN 'John'
+            WHEN 3 THEN 'Patricia'
+            WHEN 4 THEN 'Robert'
+            WHEN 5 THEN 'Linda'
+            WHEN 6 THEN 'Michael'
+            WHEN 7 THEN 'Barbara'
+            WHEN 8 THEN 'David'
+            WHEN 9 THEN 'Elizabeth'
+        END,
+
+    PatientLastName =
+        CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_LN') AS BIGINT)) % 10
+            WHEN 0 THEN 'Smith'
+            WHEN 1 THEN 'Johnson'
+            WHEN 2 THEN 'Williams'
+            WHEN 3 THEN 'Brown'
+            WHEN 4 THEN 'Jones'
+            WHEN 5 THEN 'Garcia'
+            WHEN 6 THEN 'Miller'
+            WHEN 7 THEN 'Davis'
+            WHEN 8 THEN 'Rodriguez'
+            WHEN 9 THEN 'Martinez'
+        END,
+
+    /* -------- PATIENT PHONES -------- */
+    HomePhone =
+        '555' +
+        RIGHT(
+            '0000000' +
+            CAST(
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_HP') AS BIGINT)) % 10000000
+                AS varchar(7)
+            ),
+            7
+        ),
+
+    WorkPhone =
+        '555' +
+        RIGHT(
+            '0000000' +
+            CAST(
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_WP') AS BIGINT)) % 10000000
+                AS varchar(7)
+            ),
+            7
+        ),
+
+    MobilePhone =
+        '555' +
+        RIGHT(
+            '0000000' +
+            CAST(
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_MP') AS BIGINT)) % 10000000
+                AS varchar(7)
+            ),
+            7
+        ),
+
+    PrimaryPhone =
+        '555' +
+        RIGHT(
+            '0000000' +
+            CAST(
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_PP') AS BIGINT)) % 10000000
+                AS varchar(7)
+            ),
+            7
+        ),
+
+    SecondaryPhone =
+        '555' +
+        RIGHT(
+            '0000000' +
+            CAST(
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_SP') AS BIGINT)) % 10000000
+                AS varchar(7)
+            ),
+            7
+        ),
+
+    /* -------- PATIENT EMAILS -------- */
+    [Primary Email] =
+        'user' + CAST(p.PAT_ENC_CSN_ID AS varchar(20)) + '@example.com',
+
+    [Secondary Email] =
+        'alt' + CAST(p.PAT_ENC_CSN_ID AS varchar(20)) + '@example.net',
+
+    /* -------- IDENTIFIERS -------- */
+    MRN =
+        'MRN' +
+        RIGHT(
+            '0000000000' +
+            CAST(
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_MRN') AS BIGINT)) % 1000000000
+                AS varchar(10)
+            ),
+            10
+        ),
+
+    SSN =
+        RIGHT(
+            '000' +
+            CAST(
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_SSN1') AS BIGINT)) % 900 + 100
+                AS varchar(3)
+            ),
+            3
+        ) + '-' +
+        RIGHT(
+            '00' +
+            CAST(
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_SSN2') AS BIGINT)) % 90 + 10
+                AS varchar(2)
+            ),
+            2
+        ) + '-' +
+        RIGHT(
+            '0000' +
+            CAST(
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_SSN3') AS BIGINT)) % 9000 + 1000
+                AS varchar(4)
+            ),
+            4
+        ),
+
+    MemberNumber =
+        'MB' +
+        RIGHT(
+            '00000000' +
+            CAST(
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_MB') AS BIGINT)) % 100000000
+                AS varchar(8)
+            ),
+            8
+        ),
+
+    /* -------- EMERGENCY CONTACT -------- */
+    EmergencyContactName =
+        CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_ECN') AS BIGINT)) % 8
+            WHEN 0 THEN 'Anna Johnson'
+            WHEN 1 THEN 'Carlos Martinez'
+            WHEN 2 THEN 'Diane Smith'
+            WHEN 3 THEN 'Eric Brown'
+            WHEN 4 THEN 'Grace Davis'
+            WHEN 5 THEN 'Henry Wilson'
+            WHEN 6 THEN 'Irene Garcia'
+            WHEN 7 THEN 'Jason Miller'
+        END,
+
+    [HomePhone(relationship)] =
+        '555' +
+        RIGHT(
+            '0000000' +
+            CAST(
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_RHP') AS BIGINT)) % 10000000
+                AS varchar(7)
+            ),
+            7
+        ),
+
+    [MobilePhone(relationship)] =
+        '555' +
+        RIGHT(
+            '0000000' +
+            CAST(
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), p.PAT_ENC_CSN_ID) + '_RMP') AS BIGINT)) % 10000000
+                AS varchar(7)
+            ),
+            7
+        ),
+
+    [Email(relationship)] =
+        'contact' + CAST(p.PAT_ENC_CSN_ID AS varchar(20)) + '@example.org'
+
+FROM [B_epic].[CDP_PAT_demograplics] AS p;
+
+++++++++++++++++++++++++++++++++++++++TRIGGER=+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+CREATE TRIGGER [B_epic].[trg_CDP_PAT_demograplics_Masking]
+ON [B_epic].[CDP_PAT_demograplics]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    UPDATE p
+    SET
+        /* -------- DOB -------- */
+        DateofBirth =
+            DATEADD(
+                DAY,
+                ABS(CAST(CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID)) AS BIGINT)) % 25550,
+                CONVERT(date, '1940-01-01')
+            ),
+
+        /* -------- OPTIONAL: RELIGION (if you want it masked too) -------- */
+        ReligiousAffiliation =
+            CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_REL') AS BIGINT)) % 6
+                WHEN 0 THEN 'Unknown'
+                WHEN 1 THEN 'Christian'
+                WHEN 2 THEN 'Muslim'
+                WHEN 3 THEN 'Jewish'
+                WHEN 4 THEN 'Hindu'
+                WHEN 5 THEN 'Other'
+            END,
+
+        /* -------- ADDRESSES -------- */
+        [Address 1: Street 1] =
+            CAST(
+                100 + (
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_S1')
+                            AS BIGINT
+                        )
+                    ) % 9000
+                ) AS varchar(5)
+            )
+            + ' ' +
+            CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_S1NAME') AS BIGINT)) % 5
+                WHEN 0 THEN 'Oak St'
+                WHEN 1 THEN 'Maple Ave'
+                WHEN 2 THEN 'Pine Dr'
+                WHEN 3 THEN 'Cedar Ln'
+                WHEN 4 THEN 'Elm St'
+            END,
+
+        [Address 2: Street 2] =
+            CASE
+                WHEN ABS(CAST(CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_APTFLAG') AS BIGINT)) % 3 = 0
+                    THEN 'Apt ' +
+                         CAST(
+                             1 + (
+                                 ABS(
+                                     CAST(
+                                         CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_APT')
+                                         AS BIGINT
+                                     )
+                                 ) % 200
+                             ) AS varchar(4)
+                         )
+                ELSE 'Suite ' +
+                     CAST(
+                         1 + (
+                             ABS(
+                                 CAST(
+                                     CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_SUITE')
+                                     AS BIGINT
+                                 )
+                             ) % 300
+                         ) AS varchar(4)
+                     )
+            END,
+
+        [Address 1: City] =
+            CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_CITY') AS BIGINT)) % 6
+                WHEN 0 THEN 'Houston'
+                WHEN 1 THEN 'Dallas'
+                WHEN 2 THEN 'Austin'
+                WHEN 3 THEN 'San Antonio'
+                WHEN 4 THEN 'Fort Worth'
+                WHEN 5 THEN 'El Paso'
+            END,
+
+        [Address 1: Zip] =
+            RIGHT(
+                '00000' +
+                CAST(
+                    70000 + (
+                        ABS(
+                            CAST(
+                                CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_ZIP1')
+                                AS BIGINT
+                            )
+                        ) % 999
+                    ) AS varchar(5)
+                ),
+                5
+            ),
+
+        /* -------- NAMES -------- */
+        PatientFirstName =
+            CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_FN') AS BIGINT)) % 10
+                WHEN 0 THEN 'James'
+                WHEN 1 THEN 'Mary'
+                WHEN 2 THEN 'John'
+                WHEN 3 THEN 'Patricia'
+                WHEN 4 THEN 'Robert'
+                WHEN 5 THEN 'Linda'
+                WHEN 6 THEN 'Michael'
+                WHEN 7 THEN 'Barbara'
+                WHEN 8 THEN 'David'
+                WHEN 9 THEN 'Elizabeth'
+            END,
+
+        PatientLastName =
+            CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_LN') AS BIGINT)) % 10
+                WHEN 0 THEN 'Smith'
+                WHEN 1 THEN 'Johnson'
+                WHEN 2 THEN 'Williams'
+                WHEN 3 THEN 'Brown'
+                WHEN 4 THEN 'Jones'
+                WHEN 5 THEN 'Garcia'
+                WHEN 6 THEN 'Miller'
+                WHEN 7 THEN 'Davis'
+                WHEN 8 THEN 'Rodriguez'
+                WHEN 9 THEN 'Martinez'
+            END,
+
+        /* -------- PATIENT PHONES -------- */
+        HomePhone =
+            '555' +
+            RIGHT(
+                '0000000' +
+                CAST(
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_HP')
+                            AS BIGINT
+                        )
+                    ) % 10000000 AS varchar(7)
+                ),
+                7
+            ),
+
+        WorkPhone =
+            '555' +
+            RIGHT(
+                '0000000' +
+                CAST(
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_WP')
+                            AS BIGINT
+                        )
+                    ) % 10000000 AS varchar(7)
+                ),
+                7
+            ),
+
+        MobilePhone =
+            '555' +
+            RIGHT(
+                '0000000' +
+                CAST(
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_MP')
+                            AS BIGINT
+                        )
+                    ) % 10000000 AS varchar(7)
+                ),
+                7
+            ),
+
+        PrimaryPhone =
+            '555' +
+            RIGHT(
+                '0000000' +
+                CAST(
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_PP')
+                            AS BIGINT
+                        )
+                    ) % 10000000 AS varchar(7)
+                ),
+                7
+            ),
+
+        SecondaryPhone =
+            '555' +
+            RIGHT(
+                '0000000' +
+                CAST(
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_SP')
+                            AS BIGINT
+                        )
+                    ) % 10000000 AS varchar(7)
+                ),
+                7
+            ),
+
+        /* -------- PATIENT EMAILS -------- */
+        [Primary Email] =
+            'user' + CAST(i.PAT_ENC_CSN_ID AS varchar(20)) + '@example.com',
+
+        [Secondary Email] =
+            'alt' + CAST(i.PAT_ENC_CSN_ID AS varchar(20)) + '@example.net',
+
+        /* -------- IDENTIFIERS -------- */
+        MRN =
+            'MRN' +
+            RIGHT(
+                '0000000000' +
+                CAST(
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_MRN')
+                            AS BIGINT
+                        )
+                    ) % 1000000000 AS varchar(10)
+                ),
+                10
+            ),
+
+        SSN =
+            RIGHT(
+                '000' +
+                CAST(
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_SSN1')
+                            AS BIGINT
+                        )
+                    ) % 900 + 100 AS varchar(3)
+                ),
+                3
+            ) + '-' +
+            RIGHT(
+                '00' +
+                CAST(
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_SSN2')
+                            AS BIGINT
+                        )
+                    ) % 90 + 10 AS varchar(2)
+                ),
+                2
+            ) + '-' +
+            RIGHT(
+                '0000' +
+                CAST(
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_SSN3')
+                            AS BIGINT
+                        )
+                    ) % 9000 + 1000 AS varchar(4)
+                ),
+                4
+            ),
+
+        MemberNumber =
+            'MB' +
+            RIGHT(
+                '00000000' +
+                CAST(
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_MB')
+                            AS BIGINT
+                        )
+                    ) % 100000000 AS varchar(8)
+                ),
+                8
+            ),
+
+        /* -------- EMERGENCY CONTACT -------- */
+        EmergencyContactName =
+            CASE ABS(CAST(CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_ECN') AS BIGINT)) % 8
+                WHEN 0 THEN 'Anna Johnson'
+                WHEN 1 THEN 'Carlos Martinez'
+                WHEN 2 THEN 'Diane Smith'
+                WHEN 3 THEN 'Eric Brown'
+                WHEN 4 THEN 'Grace Davis'
+                WHEN 5 THEN 'Henry Wilson'
+                WHEN 6 THEN 'Irene Garcia'
+                WHEN 7 THEN 'Jason Miller'
+            END,
+
+        [HomePhone(relationship)] =
+            '555' +
+            RIGHT(
+                '0000000' +
+                CAST(
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_RHP')
+                            AS BIGINT
+                        )
+                    ) % 10000000 AS varchar(7)
+                ),
+                7
+            ),
+
+        [MobilePhone(relationship)] =
+            '555' +
+            RIGHT(
+                '0000000' +
+                CAST(
+                    ABS(
+                        CAST(
+                            CHECKSUM(CONVERT(varchar(30), i.PAT_ENC_CSN_ID) + '_RMP')
+                            AS BIGINT
+                        )
+                    ) % 10000000 AS varchar(7)
+                ),
+                7
+            ),
+
+        [Email(relationship)] =
+            'contact' + CAST(i.PAT_ENC_CSN_ID AS varchar(20)) + '@example.org'
+
+    FROM [B_epic].[CDP_PAT_demograplics] AS p
+    JOIN inserted AS i
+      ON p.PAT_ENC_CSN_ID = i.PAT_ENC_CSN_ID;
+END;
+GO
+
+
+
+
+
+
