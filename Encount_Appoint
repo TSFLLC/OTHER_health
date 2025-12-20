@@ -1,0 +1,177 @@
+[MRN]
+      ,[EncounterId]
+      ,[EncounterLine]
+      ,[EncounterDate]
+      ,[Location]
+      ,[ReasonCode]
+      ,[AdmissionDateTime]
+      ,[DischargeDateTime]
+      ,[VisitReason]
+      ,[LastUpdated]
+      ,[ApptProviderID]
+      ,[ApptProvider]
+      ,[ApptProviderNPI]
+      ,[EpicAppointmentsDept]
+      ,[ApptDept]
+      ,[Providerspecialty]
+      ,[EncounterClass]
+      ,[EpicEncountersCreatedOn]
+      ,[EpicEncountersStatus]
+      ,[EpicEncountersType]
+      ,[EpicEncountersVisitCount]
+      ,[ServiceAreaName]
+      ,[ServiceAreaID]
+      ,[SNOMEDCT]
+      ,[PCPEncounter]
+      ,[FinancialClass]
+      ,[PrimaryHealthPlanName]
+      ,[PrimaryMemberNumber]
+      ,[PrimaryGroupNumber]
+      ,[SecondaryHealthPlanName]
+      ,[SecondaryMemberNumber]
+      ,[SecondaryGroupNumber]
+      ,[DRG]
+      ,[CPT]
+      ,[CPT Modifiers]
+      ,[ICD10]
+      ,[HCPCS]
+      ,[AttendingProviderID]
+      ,[AttendingProviderName]
+      ,[OrderingProviderID]
+      ,[OrderingProviderName]
+      ,[PrimaryCareProviderID]
+      ,[PrimaryCareProviderName]
+      ,[VisitProviderID]
+      ,[Visit ProviderName]
+      ,[AdmissionProviderID]
+      ,[AdmissionProviderName]
+      ,[BillAttendingProviderID]
+      ,[BillAttendingProviderName]
+      ,[DischargeProviderID]
+      ,[DischargeProviderName]
+      ,[Follow-upProviderID]
+      ,[FollowupProviderName]
+      ,[ACORegistryID]
+      ,[ACORegistryName]
+from [S_cdpdynamics].[CDP_ENCOUNTERS]
+----------------------------------------------------
+
+
+[AppointmentID]
+      ,[MRN]
+      ,[PatientLastName]
+      ,[PatientFirstName]
+      ,[PatientMI]
+      ,[PatientNameSuffix]
+      ,[PatientEmailAddress]
+      ,[MobilePhone]
+      ,[EncounterDate]
+      ,[AppointmentDate]
+      ,[AppointmentStartTime]
+      ,[AppointmentEndTime]
+      ,[AppointmentDuration]
+      ,[AppointmentTypeCode]
+      ,[AppointmentDescription]
+      ,[VisitReasonCode]
+      ,[VisitReasonDescription]
+      ,[Resource]
+      ,[SchedulingLocationCode]
+      ,[SchedulingLocationDescription]
+      ,[AppointmentState]
+      ,[AppointmentComment]
+      ,[AppointmentFacilityCode]
+      ,[AppointmentFacilityName]
+      ,[VisitencounterID]
+      ,[PatientGender]
+      ,[PatientDateofBirth]
+      ,[PatientHomeAddress1]
+      ,[PatientHomeAddressCity]
+      ,[PatientHomeAddressState]
+      ,[PatientHomeAddressZipcode]
+      ,[PatientHomeAddressCounty]
+      ,[HomePhone]
+      ,[WorkPhone]
+      ,[PreferredPhone]
+      ,[PrimaryCarePhysicianNPI]
+      ,[PatientPrimaryCarePhysician]
+      ,[PrimaryHealthPlanName]
+      ,[SecondaryHealthPlanName]
+      ,[UserName]
+      ,[LastUpdated]
+      ,[CMSCode (for exclusion)]
+      ,[Department]
+      ,[EpicAppointmentsCreated On]
+      ,[EpicAppointmentsID]
+      ,[EpicAppointmentsStatus]
+      ,[EpicAppointmentsType]
+      ,[Market]
+      ,[ReferringPhysicianID]
+      ,[ReferringPhysician]
+      ,[ReferringPhysicianNPI]
+      ,[Referralcode]
+      ,[Referralcreatedondate]
+      ,[ReferralStatus(Open/ Close)]
+      ,[Referralsflag (in Epic Encounters feed/table in TERA )]
+      ,[SourceofEpicAppointmentssheduling]
+      ,[Visit_Encounters_ID]
+      ,[Work Phone]
+      ,[PCPEncounter]
+  FROM [TERA].[S_cdpdynamics].[CDP_APPOINTMENTS]
+
+---------------------------------------------------------------------
+Encounter.
+MRN
+EncounterId
+Encounter_Line
+EncounterDate
+AdmissionDateTime
+DischargeDateTime
+Epic Encounters Created On
+ReasonCode
+VisitReason
+SNOMED CT
+DRG
+CPT
+CPT Modifiers
+ICD10
+Primary HealthPlanName
+Primary MemberNumber
+Primary GroupNumber
+Secondary HealthPlanName
+Secondary MemberNumber
+Secondary GroupNumber
+FinancialClass
+
+--------------------///----------------------------------
+Appointment.
+PatientFirstName
+PatientLastName
+MRN
+PatientHomeAddress1
+PatientHomeAddress2
+PatientHomeAddressCity
+PatientHomeAddressZipcode
+HomePhone
+WorkPhone
+MobilePhone
+PatientEmailAddress
+PatientDateOfBirth
+VisitReasonCode
+VisitReasonDescription
+AppointmentDescription
+AppointmentTypeCode
+AppointmentComment
+PrimaryHealthPlanName
+SecondaryHealthPlanName
+AppointmentID
+VisitEncounterID
+Visit/Epic Encounters ID
+Epic Appointments ID
+Referral code
+Referral createdon date
+EncounterDate
+AppointmentDate
+AppointmentStartTime
+AppointmentEndTime
+
+
