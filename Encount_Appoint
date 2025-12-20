@@ -1,177 +1,580 @@
-[MRN]
-      ,[EncounterId]
-      ,[EncounterLine]
-      ,[EncounterDate]
-      ,[Location]
-      ,[ReasonCode]
-      ,[AdmissionDateTime]
-      ,[DischargeDateTime]
-      ,[VisitReason]
-      ,[LastUpdated]
-      ,[ApptProviderID]
-      ,[ApptProvider]
-      ,[ApptProviderNPI]
-      ,[EpicAppointmentsDept]
-      ,[ApptDept]
-      ,[Providerspecialty]
-      ,[EncounterClass]
-      ,[EpicEncountersCreatedOn]
-      ,[EpicEncountersStatus]
-      ,[EpicEncountersType]
-      ,[EpicEncountersVisitCount]
-      ,[ServiceAreaName]
-      ,[ServiceAreaID]
-      ,[SNOMEDCT]
-      ,[PCPEncounter]
-      ,[FinancialClass]
-      ,[PrimaryHealthPlanName]
-      ,[PrimaryMemberNumber]
-      ,[PrimaryGroupNumber]
-      ,[SecondaryHealthPlanName]
-      ,[SecondaryMemberNumber]
-      ,[SecondaryGroupNumber]
-      ,[DRG]
-      ,[CPT]
-      ,[CPT Modifiers]
-      ,[ICD10]
-      ,[HCPCS]
-      ,[AttendingProviderID]
-      ,[AttendingProviderName]
-      ,[OrderingProviderID]
-      ,[OrderingProviderName]
-      ,[PrimaryCareProviderID]
-      ,[PrimaryCareProviderName]
-      ,[VisitProviderID]
-      ,[Visit ProviderName]
-      ,[AdmissionProviderID]
-      ,[AdmissionProviderName]
-      ,[BillAttendingProviderID]
-      ,[BillAttendingProviderName]
-      ,[DischargeProviderID]
-      ,[DischargeProviderName]
-      ,[Follow-upProviderID]
-      ,[FollowupProviderName]
-      ,[ACORegistryID]
-      ,[ACORegistryName]
-from [S_cdpdynamics].[CDP_ENCOUNTERS]
-----------------------------------------------------
+USE TERA;
+GO
+
+/*========================================================
+  STATIC MASKING (CRITICAL ONLY)
+  TABLE : S_cdpdynamics.CDP_ENCOUNTERS
+  SEED  : EncounterId
+=========================================================*/
+
+UPDATE E
+SET
+    -- identifiers
+    MRN                 = M.MaskedMRN,
+    -- EncounterId       = M.MaskedEncounterId,  -- optional; keep key by default
+    EncounterLine        = M.MaskedEncounterLine,
+
+    -- dates of care
+    EncounterDate        = M.MaskedEncounterDate,
+    AdmissionDateTime    = M.MaskedAdmissionDateTime,
+    DischargeDateTime    = M.MaskedDischargeDateTime,
+    EpicEncountersCreatedOn = M.MaskedEpicEncountersCreatedOn,
+
+    -- clinical codes / reasons
+    ReasonCode           = M.MaskedReasonCode,
+    VisitReason          = M.MaskedVisitReason,
+    SNOMEDCT             = M.MaskedSNOMEDCT,
+    DRG                  = M.MaskedDRG,
+    CPT                  = M.MaskedCPT,
+    [CPT Modifiers]      = M.MaskedCPTModifiers,
+    ICD10                = M.MaskedICD10,
+
+    -- insurance / coverage
+    FinancialClass         = M.MaskedFinancialClass,
+    PrimaryHealthPlanName  = M.MaskedPrimaryHealthPlanName,
+    PrimaryMemberNumber    = M.MaskedPrimaryMemberNumber,
+    PrimaryGroupNumber     = M.MaskedPrimaryGroupNumber,
+    SecondaryHealthPlanName= M.MaskedSecondaryHealthPlanName,
+    SecondaryMemberNumber  = M.MaskedSecondaryMemberNumber,
+    SecondaryGroupNumber   = M.MaskedSecondaryGroupNumber
+FROM S_cdpdynamics.CDP_ENCOUNTERS AS E
+CROSS APPLY
+(
+    SELECT ABS(CHECKSUM(E.EncounterId)) AS Seed
+) AS S
+CROSS APPLY
+(
+    SELECT
+        ------------------------------------------------------------
+        -- NUMERIC TOKENS (safe for INT or VARCHAR)
+        ------------------------------------------------------------
+        CAST(ABS(CHECKSUM('MRN', S.Seed)) AS BIGINT)            AS MaskedMRN,
+        CAST(ABS(CHECKSUM('EncId', S.Seed)) AS BIGINT)          AS MaskedEncounterId,
+        CAST(ABS(CHECKSUM('EncLine', S.Seed)) AS BIGINT)        AS MaskedEncounterLine,
+
+        -- codes (as INT tokens)
+        CAST(1000 + (S.Seed % 9000) AS INT)                     AS MaskedReasonCode,
+        CAST(2000 + (S.Seed % 9000) AS INT)                     AS MaskedDRG,
+        CAST(3000 + (S.Seed % 9000) AS INT)                     AS MaskedCPT,
+        CAST(4000 + (S.Seed % 9000) AS INT)                     AS MaskedCPTModifiers,
+        CAST(5000 + (S.Seed % 9000) AS INT)                     AS MaskedICD10,
+        CAST(ABS(CHECKSUM('FinClass', S.Seed)) AS INT)          AS MaskedFinancialClass,
+
+        -- member/group numbers
+        CAST(ABS(CHECKSUM('P-Mem', S.Seed)) AS BIGINT)          AS MaskedPrimaryMemberNumber,
+        CAST(ABS(CHECKSUM('P-Grp', S.Seed)) AS BIGINT)          AS MaskedPrimaryGroupNumber,
+        CAST(ABS(CHECKSUM('S-Mem', S.Seed)) AS BIGINT)          AS MaskedSecondaryMemberNumber,
+        CAST(ABS(CHECKSUM('S-Grp', S.Seed)) AS BIGINT)          AS MaskedSecondaryGroupNumber,
+
+        ------------------------------------------------------------
+        -- TEXT VALUES (realistic/generic)
+        ------------------------------------------------------------
+        'General consultation (masked)'                         AS MaskedVisitReason,
+        'SNOMED_MASKED_' + CAST(S.Seed % 100000 AS VARCHAR(6))  AS MaskedSNOMEDCT,
+        'Health Plan A (masked)'                                AS MaskedPrimaryHealthPlanName,
+        'Health Plan B (masked)'                                AS MaskedSecondaryHealthPlanName,
+
+        ------------------------------------------------------------
+        -- DATES / TIMES (deterministic shift)
+        ------------------------------------------------------------
+        DATEADD(DAY, (S.Seed % 365),
+            ISNULL(E.EncounterDate, CAST('2018-01-01' AS DATE))
+        ) AS MaskedEncounterDate,
+
+        DATEADD(DAY, (S.Seed % 365),
+            ISNULL(E.AdmissionDateTime, CAST('2018-01-01' AS DATETIME2))
+        ) AS MaskedAdmissionDateTime,
+
+        DATEADD(DAY, (S.Seed % 365),
+            ISNULL(E.DischargeDateTime, CAST('2018-01-02' AS DATETIME2))
+        ) AS MaskedDischargeDateTime,
+
+        DATEADD(DAY, (S.Seed % 365),
+            ISNULL(E.EpicEncountersCreatedOn, CAST('2018-01-01' AS DATETIME2))
+        ) AS MaskedEpicEncountersCreatedOn
+) AS M;
+GO
+--------------------/// triggers--------------------------------------------
+USE TERA;
+GO
+
+IF OBJECT_ID('S_cdpdynamics.trg_CDP_ENCOUNTERS_Masking', 'TR') IS NOT NULL
+    DROP TRIGGER S_cdpdynamics.trg_CDP_ENCOUNTERS_Masking;
+GO
+
+CREATE TRIGGER S_cdpdynamics.trg_CDP_ENCOUNTERS_Masking
+ON S_cdpdynamics.CDP_ENCOUNTERS
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    ;WITH ToMask AS
+    (
+        SELECT E.*
+        FROM S_cdpdynamics.CDP_ENCOUNTERS E
+        INNER JOIN inserted i
+            ON E.EncounterId = i.EncounterId
+    )
+    UPDATE E
+    SET
+        MRN                 = M.MaskedMRN,
+        -- EncounterId       = M.MaskedEncounterId,   -- optional; keep key by default
+        EncounterLine        = M.MaskedEncounterLine,
+        EncounterDate        = M.MaskedEncounterDate,
+        AdmissionDateTime    = M.MaskedAdmissionDateTime,
+        DischargeDateTime    = M.MaskedDischargeDateTime,
+        EpicEncountersCreatedOn = M.MaskedEpicEncountersCreatedOn,
+        ReasonCode           = M.MaskedReasonCode,
+        VisitReason          = M.MaskedVisitReason,
+        SNOMEDCT             = M.MaskedSNOMEDCT,
+        DRG                  = M.MaskedDRG,
+        CPT                  = M.MaskedCPT,
+        [CPT Modifiers]      = M.MaskedCPTModifiers,
+        ICD10                = M.MaskedICD10,
+        FinancialClass         = M.MaskedFinancialClass,
+        PrimaryHealthPlanName  = M.MaskedPrimaryHealthPlanName,
+        PrimaryMemberNumber    = M.MaskedPrimaryMemberNumber,
+        PrimaryGroupNumber     = M.MaskedPrimaryGroupNumber,
+        SecondaryHealthPlanName= M.MaskedSecondaryHealthPlanName,
+        SecondaryMemberNumber  = M.MaskedSecondaryMemberNumber,
+        SecondaryGroupNumber   = M.MaskedSecondaryGroupNumber
+    FROM ToMask E
+    CROSS APPLY
+    (
+        SELECT ABS(CHECKSUM(E.EncounterId)) AS Seed
+    ) AS S
+    CROSS APPLY
+    (
+        SELECT
+            CAST(ABS(CHECKSUM('MRN', S.Seed)) AS BIGINT)            AS MaskedMRN,
+            CAST(ABS(CHECKSUM('EncId', S.Seed)) AS BIGINT)          AS MaskedEncounterId,
+            CAST(ABS(CHECKSUM('EncLine', S.Seed)) AS BIGINT)        AS MaskedEncounterLine,
+            CAST(1000 + (S.Seed % 9000) AS INT)                     AS MaskedReasonCode,
+            CAST(2000 + (S.Seed % 9000) AS INT)                     AS MaskedDRG,
+            CAST(3000 + (S.Seed % 9000) AS INT)                     AS MaskedCPT,
+            CAST(4000 + (S.Seed % 9000) AS INT)                     AS MaskedCPTModifiers,
+            CAST(5000 + (S.Seed % 9000) AS INT)                     AS MaskedICD10,
+            CAST(ABS(CHECKSUM('FinClass', S.Seed)) AS INT)          AS MaskedFinancialClass,
+            CAST(ABS(CHECKSUM('P-Mem', S.Seed)) AS BIGINT)          AS MaskedPrimaryMemberNumber,
+            CAST(ABS(CHECKSUM('P-Grp', S.Seed)) AS BIGINT)          AS MaskedPrimaryGroupNumber,
+            CAST(ABS(CHECKSUM('S-Mem', S.Seed)) AS BIGINT)          AS MaskedSecondaryMemberNumber,
+            CAST(ABS(CHECKSUM('S-Grp', S.Seed)) AS BIGINT)          AS MaskedSecondaryGroupNumber,
+            'General consultation (masked)'                         AS MaskedVisitReason,
+            'SNOMED_MASKED_' + CAST(S.Seed % 100000 AS VARCHAR(6))  AS MaskedSNOMEDCT,
+            'Health Plan A (masked)'                                AS MaskedPrimaryHealthPlanName,
+            'Health Plan B (masked)'                                AS MaskedSecondaryHealthPlanName,
+            DATEADD(DAY, (S.Seed % 365),
+                ISNULL(E.EncounterDate, CAST('2018-01-01' AS DATE))
+            ) AS MaskedEncounterDate,
+            DATEADD(DAY, (S.Seed % 365),
+                ISNULL(E.AdmissionDateTime, CAST('2018-01-01' AS DATETIME2))
+            ) AS MaskedAdmissionDateTime,
+            DATEADD(DAY, (S.Seed % 365),
+                ISNULL(E.DischargeDateTime, CAST('2018-01-02' AS DATETIME2))
+            ) AS MaskedDischargeDateTime,
+            DATEADD(DAY, (S.Seed % 365),
+                ISNULL(E.EpicEncountersCreatedOn, CAST('2018-01-01' AS DATETIME2))
+            ) AS MaskedEpicEncountersCreatedOn
+    ) AS M;
+END;
+GO
 
 
-[AppointmentID]
-      ,[MRN]
-      ,[PatientLastName]
-      ,[PatientFirstName]
-      ,[PatientMI]
-      ,[PatientNameSuffix]
-      ,[PatientEmailAddress]
-      ,[MobilePhone]
-      ,[EncounterDate]
-      ,[AppointmentDate]
-      ,[AppointmentStartTime]
-      ,[AppointmentEndTime]
-      ,[AppointmentDuration]
-      ,[AppointmentTypeCode]
-      ,[AppointmentDescription]
-      ,[VisitReasonCode]
-      ,[VisitReasonDescription]
-      ,[Resource]
-      ,[SchedulingLocationCode]
-      ,[SchedulingLocationDescription]
-      ,[AppointmentState]
-      ,[AppointmentComment]
-      ,[AppointmentFacilityCode]
-      ,[AppointmentFacilityName]
-      ,[VisitencounterID]
-      ,[PatientGender]
-      ,[PatientDateofBirth]
-      ,[PatientHomeAddress1]
-      ,[PatientHomeAddressCity]
-      ,[PatientHomeAddressState]
-      ,[PatientHomeAddressZipcode]
-      ,[PatientHomeAddressCounty]
-      ,[HomePhone]
-      ,[WorkPhone]
-      ,[PreferredPhone]
-      ,[PrimaryCarePhysicianNPI]
-      ,[PatientPrimaryCarePhysician]
-      ,[PrimaryHealthPlanName]
-      ,[SecondaryHealthPlanName]
-      ,[UserName]
-      ,[LastUpdated]
-      ,[CMSCode (for exclusion)]
-      ,[Department]
-      ,[EpicAppointmentsCreated On]
-      ,[EpicAppointmentsID]
-      ,[EpicAppointmentsStatus]
-      ,[EpicAppointmentsType]
-      ,[Market]
-      ,[ReferringPhysicianID]
-      ,[ReferringPhysician]
-      ,[ReferringPhysicianNPI]
-      ,[Referralcode]
-      ,[Referralcreatedondate]
-      ,[ReferralStatus(Open/ Close)]
-      ,[Referralsflag (in Epic Encounters feed/table in TERA )]
-      ,[SourceofEpicAppointmentssheduling]
-      ,[Visit_Encounters_ID]
-      ,[Work Phone]
-      ,[PCPEncounter]
-  FROM [TERA].[S_cdpdynamics].[CDP_APPOINTMENTS]
 
----------------------------------------------------------------------
-Encounter.
-MRN
-EncounterId
-Encounter_Line
-EncounterDate
-AdmissionDateTime
-DischargeDateTime
-Epic Encounters Created On
-ReasonCode
-VisitReason
-SNOMED CT
-DRG
-CPT
-CPT Modifiers
-ICD10
-Primary HealthPlanName
-Primary MemberNumber
-Primary GroupNumber
-Secondary HealthPlanName
-Secondary MemberNumber
-Secondary GroupNumber
-FinancialClass
+++++++++++++++++++++++++++++++++Appointment++++++++++++++++++++++++++++++++++++++++++
 
---------------------///----------------------------------
-Appointment.
-PatientFirstName
-PatientLastName
-MRN
-PatientHomeAddress1
-PatientHomeAddress2
-PatientHomeAddressCity
-PatientHomeAddressZipcode
-HomePhone
-WorkPhone
-MobilePhone
-PatientEmailAddress
-PatientDateOfBirth
-VisitReasonCode
-VisitReasonDescription
-AppointmentDescription
-AppointmentTypeCode
-AppointmentComment
-PrimaryHealthPlanName
-SecondaryHealthPlanName
-AppointmentID
-VisitEncounterID
-Visit/Epic Encounters ID
-Epic Appointments ID
-Referral code
-Referral createdon date
-EncounterDate
-AppointmentDate
-AppointmentStartTime
-AppointmentEndTime
+USE TERA;
+GO
+
+/*========================================================
+  STATIC MASKING (CRITICAL FIELDS)
+  TABLE : TERA.S_cdpdynamics.CDP_APPOINTMENTS
+  SEED  : AppointmentID
+=========================================================*/
+
+UPDATE A
+SET
+    -- Patient identifiers
+    PatientFirstName       = M.MaskedFirstName,
+    PatientLastName        = M.MaskedLastName,
+    MRN                    = M.MaskedMRN,
+    PatientEmailAddress    = M.MaskedEmail,
+
+    -- Address
+    PatientHomeAddress1       = M.MaskedAddress1,
+    PatientHomeAddressCity    = M.MaskedCity,
+    PatientHomeAddressZipcode = M.MaskedZip,
+
+    -- Phones (mask both possible work phone columns)
+    HomePhone   = M.MaskedHomePhone,
+    WorkPhone   = M.MaskedWorkPhone,
+    [Work Phone]= M.MaskedWorkPhone,
+    MobilePhone = M.MaskedMobilePhone,
+
+    -- DOB
+    PatientDateofBirth = M.MaskedDOB,
+
+    -- Visit / appointment reason (codes and text)
+    VisitReasonCode        = M.MaskedVisitReasonCode,
+    VisitReasonDescription = M.MaskedVisitReasonDesc,
+
+    -- Appointment details
+    AppointmentDescription = M.MaskedApptDesc,
+    AppointmentTypeCode    = M.MaskedApptTypeCode,
+    AppointmentComment     = M.MaskedApptComment,
+
+    -- Insurance
+    PrimaryHealthPlanName   = M.MaskedPrimaryPlan,
+    SecondaryHealthPlanName = M.MaskedSecondaryPlan,
+
+    -- IDs / join keys (tokenize but DO NOT touch AppointmentID itself)
+    VisitencounterID     = M.MaskedVisitEncounterID,
+    Visit_Encounters_ID  = M.MaskedVisitEpicEncountersID,
+    EpicAppointmentsID   = M.MaskedEpicAppointmentsID,
+
+    -- Referral
+    Referralcode         = M.MaskedReferralCode,
+    Referralcreatedondate= M.MaskedReferralCreatedOn,
+
+    -- Dates / times of care
+    EncounterDate        = M.MaskedEncounterDate,
+    AppointmentDate      = M.MaskedAppointmentDate,
+    AppointmentStartTime = M.MaskedStartTime,
+    AppointmentEndTime   = M.MaskedEndTime
+FROM TERA.S_cdpdynamics.CDP_APPOINTMENTS AS A
+CROSS APPLY
+(
+    SELECT ABS(CHECKSUM(A.AppointmentID)) AS Seed
+) AS S
+CROSS APPLY
+(
+    SELECT
+        ------------------------------------------------------------
+        -- NAMES (realistic text)
+        ------------------------------------------------------------
+        CASE S.Seed % 10
+            WHEN 0 THEN 'James'
+            WHEN 1 THEN 'Mary'
+            WHEN 2 THEN 'Robert'
+            WHEN 3 THEN 'Patricia'
+            WHEN 4 THEN 'John'
+            WHEN 5 THEN 'Jennifer'
+            WHEN 6 THEN 'Michael'
+            WHEN 7 THEN 'Linda'
+            WHEN 8 THEN 'David'
+            ELSE 'Sarah'
+        END AS MaskedFirstName,
+
+        CASE (S.Seed / 10) % 10
+            WHEN 0 THEN 'Smith'
+            WHEN 1 THEN 'Johnson'
+            WHEN 2 THEN 'Brown'
+            WHEN 3 THEN 'Williams'
+            WHEN 4 THEN 'Jones'
+            WHEN 5 THEN 'Garcia'
+            WHEN 6 THEN 'Miller'
+            WHEN 7 THEN 'Davis'
+            WHEN 8 THEN 'Lopez'
+            ELSE 'Taylor'
+        END AS MaskedLastName,
+
+        ------------------------------------------------------------
+        -- MRN + IDs (numeric tokens safe for INT or VARCHAR)
+        ------------------------------------------------------------
+        CAST(ABS(CHECKSUM('MRN', S.Seed)) AS BIGINT)        AS MaskedMRN,
+        CAST(ABS(CHECKSUM('VEID', S.Seed)) AS BIGINT)       AS MaskedVisitEncounterID,
+        CAST(ABS(CHECKSUM('VEEID', S.Seed)) AS BIGINT)      AS MaskedVisitEpicEncountersID,
+        CAST(ABS(CHECKSUM('EAID', S.Seed)) AS BIGINT)       AS MaskedEpicAppointmentsID,
+
+        ------------------------------------------------------------
+        -- Address (text) + ZIP numeric
+        ------------------------------------------------------------
+        CASE S.Seed % 5
+            WHEN 0 THEN '123 Main St'
+            WHEN 1 THEN '456 Oak Ave'
+            WHEN 2 THEN '789 Pine Road'
+            WHEN 3 THEN '321 Maple Drive'
+            ELSE '654 Elm Street'
+        END AS MaskedAddress1,
+
+        CASE (S.Seed / 5) % 5
+            WHEN 0 THEN 'Houston'
+            WHEN 1 THEN 'Dallas'
+            WHEN 2 THEN 'Austin'
+            WHEN 3 THEN 'San Antonio'
+            ELSE 'Fort Worth'
+        END AS MaskedCity,
+
+        CAST(10000 + (S.Seed % 90000) AS INT) AS MaskedZip,
+
+        ------------------------------------------------------------
+        -- Phones: 10-digit strings (safe for varchar or numeric)
+        ------------------------------------------------------------
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('H', S.Seed)) AS VARCHAR(10)), 10) AS MaskedHomePhone,
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('W', S.Seed)) AS VARCHAR(10)), 10) AS MaskedWorkPhone,
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('M', S.Seed)) AS VARCHAR(10)), 10) AS MaskedMobilePhone,
+
+        ------------------------------------------------------------
+        -- Email (realistic text)
+        ------------------------------------------------------------
+        LOWER(
+            CASE S.Seed % 10
+                WHEN 0 THEN 'james'
+                WHEN 1 THEN 'mary'
+                WHEN 2 THEN 'robert'
+                WHEN 3 THEN 'patricia'
+                WHEN 4 THEN 'john'
+                WHEN 5 THEN 'jennifer'
+                WHEN 6 THEN 'michael'
+                WHEN 7 THEN 'linda'
+                WHEN 8 THEN 'david'
+                ELSE 'sarah'
+            END + '.' +
+            CASE (S.Seed / 10) % 10
+                WHEN 0 THEN 'smith'
+                WHEN 1 THEN 'johnson'
+                WHEN 2 THEN 'brown'
+                WHEN 3 THEN 'williams'
+                WHEN 4 THEN 'jones'
+                WHEN 5 THEN 'garcia'
+                WHEN 6 THEN 'miller'
+                WHEN 7 THEN 'davis'
+                WHEN 8 THEN 'lopez'
+                ELSE 'taylor'
+            END + '@examplemail.com'
+        ) AS MaskedEmail,
+
+        ------------------------------------------------------------
+        -- DOB (date)
+        ------------------------------------------------------------
+        DATEFROMPARTS(
+            1940 + (S.Seed % 60),
+            1 + ((S.Seed / 100) % 12),
+            1 + ((S.Seed / 1000) % 28)
+        ) AS MaskedDOB,
+
+        ------------------------------------------------------------
+        -- Reason codes & descriptions
+        ------------------------------------------------------------
+        CAST(1000 + (S.Seed % 9000) AS INT) AS MaskedVisitReasonCode,
+        'General consultation (masked)'     AS MaskedVisitReasonDesc,
+
+        ------------------------------------------------------------
+        -- Appointment fields (type/code numeric token + text desc)
+        ------------------------------------------------------------
+        CAST(10 + (S.Seed % 90) AS INT)      AS MaskedApptTypeCode,
+        'Routine visit (masked)'             AS MaskedApptDesc,
+
+        -- AppointmentComment can be INT in some environments; use numeric token
+        CAST(100000 + (S.Seed % 900000) AS INT) AS MaskedApptComment,
+
+        ------------------------------------------------------------
+        -- Insurance (text)
+        ------------------------------------------------------------
+        'Health Plan A (masked)' AS MaskedPrimaryPlan,
+        'Health Plan B (masked)' AS MaskedSecondaryPlan,
+
+        ------------------------------------------------------------
+        -- Referral (Referralcode can be numeric in some feeds; use numeric token)
+        ------------------------------------------------------------
+        CAST(ABS(CHECKSUM('REF', S.Seed)) AS BIGINT) AS MaskedReferralCode,
+        DATEADD(DAY, (S.Seed % 365),
+            ISNULL(A.Referralcreatedondate, CAST('2018-01-01' AS DATE))
+        ) AS MaskedReferralCreatedOn,
+
+        ------------------------------------------------------------
+        -- Dates / times (deterministic shift)
+        ------------------------------------------------------------
+        DATEADD(DAY, (S.Seed % 365),
+            ISNULL(A.EncounterDate, CAST('2018-01-01' AS DATE))
+        ) AS MaskedEncounterDate,
+
+        DATEADD(DAY, (S.Seed % 365),
+            ISNULL(A.AppointmentDate, CAST('2018-01-01' AS DATE))
+        ) AS MaskedAppointmentDate,
+
+        TIMEFROMPARTS(8 + (S.Seed % 9), (S.Seed / 10) % 60, 0, 0, 0) AS MaskedStartTime,
+        TIMEFROMPARTS(9 + (S.Seed % 9), (S.Seed / 20) % 60, 0, 0, 0) AS MaskedEndTime
+) AS M;
+GO
+
+
+++++++++++++++++++++++++++++--triggers+-----------------------------------
+USE TERA;
+GO
+
+IF OBJECT_ID('S_cdpdynamics.trg_CDP_APPOINTMENTS_Masking', 'TR') IS NOT NULL
+    DROP TRIGGER S_cdpdynamics.trg_CDP_APPOINTMENTS_Masking;
+GO
+
+CREATE TRIGGER S_cdpdynamics.trg_CDP_APPOINTMENTS_Masking
+ON TERA.S_cdpdynamics.CDP_APPOINTMENTS
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    ;WITH ToMask AS
+    (
+        SELECT A.*
+        FROM TERA.S_cdpdynamics.CDP_APPOINTMENTS A
+        INNER JOIN inserted i
+            ON A.AppointmentID = i.AppointmentID
+    )
+    UPDATE A
+    SET
+        PatientFirstName       = M.MaskedFirstName,
+        PatientLastName        = M.MaskedLastName,
+        MRN                    = M.MaskedMRN,
+        PatientEmailAddress    = M.MaskedEmail,
+        PatientHomeAddress1       = M.MaskedAddress1,
+        PatientHomeAddressCity    = M.MaskedCity,
+        PatientHomeAddressZipcode = M.MaskedZip,
+        HomePhone              = M.MaskedHomePhone,
+        WorkPhone              = M.MaskedWorkPhone,
+        [Work Phone]           = M.MaskedWorkPhone,
+        MobilePhone            = M.MaskedMobilePhone,
+        PatientDateofBirth     = M.MaskedDOB,
+        VisitReasonCode        = M.MaskedVisitReasonCode,
+        VisitReasonDescription = M.MaskedVisitReasonDesc,
+        AppointmentDescription = M.MaskedApptDesc,
+        AppointmentTypeCode    = M.MaskedApptTypeCode,
+        AppointmentComment     = M.MaskedApptComment,
+        PrimaryHealthPlanName  = M.MaskedPrimaryPlan,
+        SecondaryHealthPlanName= M.MaskedSecondaryPlan,
+        VisitencounterID       = M.MaskedVisitEncounterID,
+        Visit_Encounters_ID    = M.MaskedVisitEpicEncountersID,
+        EpicAppointmentsID     = M.MaskedEpicAppointmentsID,
+        Referralcode           = M.MaskedReferralCode,
+        Referralcreatedondate  = M.MaskedReferralCreatedOn,
+        EncounterDate          = M.MaskedEncounterDate,
+        AppointmentDate        = M.MaskedAppointmentDate,
+        AppointmentStartTime   = M.MaskedStartTime,
+        AppointmentEndTime     = M.MaskedEndTime
+    FROM ToMask A
+    CROSS APPLY
+    (
+        SELECT ABS(CHECKSUM(A.AppointmentID)) AS Seed
+    ) AS S
+    CROSS APPLY
+    (
+        SELECT
+            CASE S.Seed % 10
+                WHEN 0 THEN 'James'
+                WHEN 1 THEN 'Mary'
+                WHEN 2 THEN 'Robert'
+                WHEN 3 THEN 'Patricia'
+                WHEN 4 THEN 'John'
+                WHEN 5 THEN 'Jennifer'
+                WHEN 6 THEN 'Michael'
+                WHEN 7 THEN 'Linda'
+                WHEN 8 THEN 'David'
+                ELSE 'Sarah'
+            END AS MaskedFirstName,
+
+            CASE (S.Seed / 10) % 10
+                WHEN 0 THEN 'Smith'
+                WHEN 1 THEN 'Johnson'
+                WHEN 2 THEN 'Brown'
+                WHEN 3 THEN 'Williams'
+                WHEN 4 THEN 'Jones'
+                WHEN 5 THEN 'Garcia'
+                WHEN 6 THEN 'Miller'
+                WHEN 7 THEN 'Davis'
+                WHEN 8 THEN 'Lopez'
+                ELSE 'Taylor'
+            END AS MaskedLastName,
+
+            CAST(ABS(CHECKSUM('MRN', S.Seed)) AS BIGINT)   AS MaskedMRN,
+            CAST(ABS(CHECKSUM('VEID', S.Seed)) AS BIGINT)  AS MaskedVisitEncounterID,
+            CAST(ABS(CHECKSUM('VEEID', S.Seed)) AS BIGINT) AS MaskedVisitEpicEncountersID,
+            CAST(ABS(CHECKSUM('EAID', S.Seed)) AS BIGINT)  AS MaskedEpicAppointmentsID,
+
+            CASE S.Seed % 5
+                WHEN 0 THEN '123 Main St'
+                WHEN 1 THEN '456 Oak Ave'
+                WHEN 2 THEN '789 Pine Road'
+                WHEN 3 THEN '321 Maple Drive'
+                ELSE '654 Elm Street'
+            END AS MaskedAddress1,
+
+            CASE (S.Seed / 5) % 5
+                WHEN 0 THEN 'Houston'
+                WHEN 1 THEN 'Dallas'
+                WHEN 2 THEN 'Austin'
+                WHEN 3 THEN 'San Antonio'
+                ELSE 'Fort Worth'
+            END AS MaskedCity,
+
+            CAST(10000 + (S.Seed % 90000) AS INT) AS MaskedZip,
+
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('H', S.Seed)) AS VARCHAR(10)), 10) AS MaskedHomePhone,
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('W', S.Seed)) AS VARCHAR(10)), 10) AS MaskedWorkPhone,
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('M', S.Seed)) AS VARCHAR(10)), 10) AS MaskedMobilePhone,
+
+            LOWER(
+                CASE S.Seed % 10
+                    WHEN 0 THEN 'james'
+                    WHEN 1 THEN 'mary'
+                    WHEN 2 THEN 'robert'
+                    WHEN 3 THEN 'patricia'
+                    WHEN 4 THEN 'john'
+                    WHEN 5 THEN 'jennifer'
+                    WHEN 6 THEN 'michael'
+                    WHEN 7 THEN 'linda'
+                    WHEN 8 THEN 'david'
+                    ELSE 'sarah'
+                END + '.' +
+                CASE (S.Seed / 10) % 10
+                    WHEN 0 THEN 'smith'
+                    WHEN 1 THEN 'johnson'
+                    WHEN 2 THEN 'brown'
+                    WHEN 3 THEN 'williams'
+                    WHEN 4 THEN 'jones'
+                    WHEN 5 THEN 'garcia'
+                    WHEN 6 THEN 'miller'
+                    WHEN 7 THEN 'davis'
+                    WHEN 8 THEN 'lopez'
+                    ELSE 'taylor'
+                END + '@examplemail.com'
+            ) AS MaskedEmail,
+
+            DATEFROMPARTS(
+                1940 + (S.Seed % 60),
+                1 + ((S.Seed / 100) % 12),
+                1 + ((S.Seed / 1000) % 28)
+            ) AS MaskedDOB,
+
+            CAST(1000 + (S.Seed % 9000) AS INT) AS MaskedVisitReasonCode,
+            'General consultation (masked)'     AS MaskedVisitReasonDesc,
+
+            CAST(10 + (S.Seed % 90) AS INT)     AS MaskedApptTypeCode,
+            'Routine visit (masked)'            AS MaskedApptDesc,
+
+            CAST(100000 + (S.Seed % 900000) AS INT) AS MaskedApptComment,
+
+            'Health Plan A (masked)' AS MaskedPrimaryPlan,
+            'Health Plan B (masked)' AS MaskedSecondaryPlan,
+
+            CAST(ABS(CHECKSUM('REF', S.Seed)) AS BIGINT) AS MaskedReferralCode,
+
+            DATEADD(DAY, (S.Seed % 365),
+                ISNULL(A.Referralcreatedondate, CAST('2018-01-01' AS DATE))
+            ) AS MaskedReferralCreatedOn,
+
+            DATEADD(DAY, (S.Seed % 365),
+                ISNULL(A.EncounterDate, CAST('2018-01-01' AS DATE))
+            ) AS MaskedEncounterDate,
+
+            DATEADD(DAY, (S.Seed % 365),
+                ISNULL(A.AppointmentDate, CAST('2018-01-01' AS DATE))
+            ) AS MaskedAppointmentDate,
+
+            TIMEFROMPARTS(8 + (S.Seed % 9), (S.Seed / 10) % 60, 0, 0, 0) AS MaskedStartTime,
+            TIMEFROMPARTS(9 + (S.Seed % 9), (S.Seed / 20) % 60, 0, 0, 0) AS MaskedEndTime
+    ) AS M;
+END;
+GO
 
 
