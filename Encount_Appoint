@@ -1,43 +1,49 @@
 USE TERA;
 GO
 
+USE TERA;
+GO
+
 /*========================================================
   STATIC MASKING (CRITICAL ONLY)
-  TABLE : S_cdpdynamics.CDP_ENCOUNTERS
+  TABLE : TERA.S_cdpdynamics.CDP_ENCOUNTERS
   SEED  : EncounterId
 =========================================================*/
 
 UPDATE E
 SET
     -- identifiers
-    MRN                 = M.MaskedMRN,
-    -- EncounterId       = M.MaskedEncounterId,  -- optional; keep key by default
-    EncounterLine        = M.MaskedEncounterLine,
+    MRN                     = M.MaskedMRN,
+    -- EncounterId           = M.MaskedEncounterId,    -- optional (usually keep key)
+    EncounterLine            = M.MaskedEncounterLine,
 
     -- dates of care
-    EncounterDate        = M.MaskedEncounterDate,
-    AdmissionDateTime    = M.MaskedAdmissionDateTime,
-    DischargeDateTime    = M.MaskedDischargeDateTime,
-    EpicEncountersCreatedOn = M.MaskedEpicEncountersCreatedOn,
+    EncounterDate            = M.MaskedEncounterDate,
+    AdmissionDateTime        = M.MaskedAdmissionDateTime,
+    DischargeDateTime        = M.MaskedDischargeDateTime,
+    EpicEncountersCreatedOn  = M.MaskedEpicEncountersCreatedOn,
 
-    -- clinical codes / reasons
-    ReasonCode           = M.MaskedReasonCode,
-    VisitReason          = M.MaskedVisitReason,
-    SNOMEDCT             = M.MaskedSNOMEDCT,
-    DRG                  = M.MaskedDRG,
-    CPT                  = M.MaskedCPT,
-    [CPT Modifiers]      = M.MaskedCPTModifiers,
-    ICD10                = M.MaskedICD10,
+    -- clinical / reason
+    ReasonCode               = M.MaskedReasonCode,
+    VisitReason              = M.MaskedVisitReason,
+
+    -- SNOMEDCT is NUMERIC in your table (FIXED)
+    SNOMEDCT                 = M.MaskedSNOMEDCT,
+
+    DRG                      = M.MaskedDRG,
+    CPT                      = M.MaskedCPT,
+    [CPT Modifiers]          = M.MaskedCPTModifiers,
+    ICD10                    = M.MaskedICD10,
 
     -- insurance / coverage
-    FinancialClass         = M.MaskedFinancialClass,
-    PrimaryHealthPlanName  = M.MaskedPrimaryHealthPlanName,
-    PrimaryMemberNumber    = M.MaskedPrimaryMemberNumber,
-    PrimaryGroupNumber     = M.MaskedPrimaryGroupNumber,
-    SecondaryHealthPlanName= M.MaskedSecondaryHealthPlanName,
-    SecondaryMemberNumber  = M.MaskedSecondaryMemberNumber,
-    SecondaryGroupNumber   = M.MaskedSecondaryGroupNumber
-FROM S_cdpdynamics.CDP_ENCOUNTERS AS E
+    FinancialClass           = M.MaskedFinancialClass,
+    PrimaryHealthPlanName    = M.MaskedPrimaryHealthPlanName,
+    PrimaryMemberNumber      = M.MaskedPrimaryMemberNumber,
+    PrimaryGroupNumber       = M.MaskedPrimaryGroupNumber,
+    SecondaryHealthPlanName  = M.MaskedSecondaryHealthPlanName,
+    SecondaryMemberNumber    = M.MaskedSecondaryMemberNumber,
+    SecondaryGroupNumber     = M.MaskedSecondaryGroupNumber
+FROM TERA.S_cdpdynamics.CDP_ENCOUNTERS AS E
 CROSS APPLY
 (
     SELECT ABS(CHECKSUM(E.EncounterId)) AS Seed
@@ -52,25 +58,28 @@ CROSS APPLY
         CAST(ABS(CHECKSUM('EncId', S.Seed)) AS BIGINT)          AS MaskedEncounterId,
         CAST(ABS(CHECKSUM('EncLine', S.Seed)) AS BIGINT)        AS MaskedEncounterLine,
 
-        -- codes (as INT tokens)
+        -- codes as INT tokens
         CAST(1000 + (S.Seed % 9000) AS INT)                     AS MaskedReasonCode,
         CAST(2000 + (S.Seed % 9000) AS INT)                     AS MaskedDRG,
         CAST(3000 + (S.Seed % 9000) AS INT)                     AS MaskedCPT,
         CAST(4000 + (S.Seed % 9000) AS INT)                     AS MaskedCPTModifiers,
         CAST(5000 + (S.Seed % 9000) AS INT)                     AS MaskedICD10,
+
+        -- ✅ SNOMEDCT is INT => must be numeric token (FIX)
+        CAST(600000 + (S.Seed % 399999) AS INT)                 AS MaskedSNOMEDCT,
+
         CAST(ABS(CHECKSUM('FinClass', S.Seed)) AS INT)          AS MaskedFinancialClass,
 
-        -- member/group numbers
+        -- member / group numbers
         CAST(ABS(CHECKSUM('P-Mem', S.Seed)) AS BIGINT)          AS MaskedPrimaryMemberNumber,
         CAST(ABS(CHECKSUM('P-Grp', S.Seed)) AS BIGINT)          AS MaskedPrimaryGroupNumber,
         CAST(ABS(CHECKSUM('S-Mem', S.Seed)) AS BIGINT)          AS MaskedSecondaryMemberNumber,
         CAST(ABS(CHECKSUM('S-Grp', S.Seed)) AS BIGINT)          AS MaskedSecondaryGroupNumber,
 
         ------------------------------------------------------------
-        -- TEXT VALUES (realistic/generic)
+        -- TEXT VALUES (generic but readable)
         ------------------------------------------------------------
         'General consultation (masked)'                         AS MaskedVisitReason,
-        'SNOMED_MASKED_' + CAST(S.Seed % 100000 AS VARCHAR(6))  AS MaskedSNOMEDCT,
         'Health Plan A (masked)'                                AS MaskedPrimaryHealthPlanName,
         'Health Plan B (masked)'                                AS MaskedSecondaryHealthPlanName,
 
@@ -94,7 +103,7 @@ CROSS APPLY
         ) AS MaskedEpicEncountersCreatedOn
 ) AS M;
 GO
---------------------/// triggers--------------------------------------------
++++++++++++++++++++Triggers==============================================
 USE TERA;
 GO
 
@@ -103,7 +112,7 @@ IF OBJECT_ID('S_cdpdynamics.trg_CDP_ENCOUNTERS_Masking', 'TR') IS NOT NULL
 GO
 
 CREATE TRIGGER S_cdpdynamics.trg_CDP_ENCOUNTERS_Masking
-ON S_cdpdynamics.CDP_ENCOUNTERS
+ON TERA.S_cdpdynamics.CDP_ENCOUNTERS
 AFTER INSERT, UPDATE
 AS
 BEGIN
@@ -112,33 +121,33 @@ BEGIN
     ;WITH ToMask AS
     (
         SELECT E.*
-        FROM S_cdpdynamics.CDP_ENCOUNTERS E
+        FROM TERA.S_cdpdynamics.CDP_ENCOUNTERS E
         INNER JOIN inserted i
             ON E.EncounterId = i.EncounterId
     )
     UPDATE E
     SET
-        MRN                 = M.MaskedMRN,
-        -- EncounterId       = M.MaskedEncounterId,   -- optional; keep key by default
-        EncounterLine        = M.MaskedEncounterLine,
-        EncounterDate        = M.MaskedEncounterDate,
-        AdmissionDateTime    = M.MaskedAdmissionDateTime,
-        DischargeDateTime    = M.MaskedDischargeDateTime,
-        EpicEncountersCreatedOn = M.MaskedEpicEncountersCreatedOn,
-        ReasonCode           = M.MaskedReasonCode,
-        VisitReason          = M.MaskedVisitReason,
-        SNOMEDCT             = M.MaskedSNOMEDCT,
-        DRG                  = M.MaskedDRG,
-        CPT                  = M.MaskedCPT,
-        [CPT Modifiers]      = M.MaskedCPTModifiers,
-        ICD10                = M.MaskedICD10,
-        FinancialClass         = M.MaskedFinancialClass,
-        PrimaryHealthPlanName  = M.MaskedPrimaryHealthPlanName,
-        PrimaryMemberNumber    = M.MaskedPrimaryMemberNumber,
-        PrimaryGroupNumber     = M.MaskedPrimaryGroupNumber,
-        SecondaryHealthPlanName= M.MaskedSecondaryHealthPlanName,
-        SecondaryMemberNumber  = M.MaskedSecondaryMemberNumber,
-        SecondaryGroupNumber   = M.MaskedSecondaryGroupNumber
+        MRN                     = M.MaskedMRN,
+        -- EncounterId           = M.MaskedEncounterId,  -- optional
+        EncounterLine            = M.MaskedEncounterLine,
+        EncounterDate            = M.MaskedEncounterDate,
+        AdmissionDateTime        = M.MaskedAdmissionDateTime,
+        DischargeDateTime        = M.MaskedDischargeDateTime,
+        EpicEncountersCreatedOn  = M.MaskedEpicEncountersCreatedOn,
+        ReasonCode               = M.MaskedReasonCode,
+        VisitReason              = M.MaskedVisitReason,
+        SNOMEDCT                 = M.MaskedSNOMEDCT,     -- ✅ numeric token
+        DRG                      = M.MaskedDRG,
+        CPT                      = M.MaskedCPT,
+        [CPT Modifiers]          = M.MaskedCPTModifiers,
+        ICD10                    = M.MaskedICD10,
+        FinancialClass           = M.MaskedFinancialClass,
+        PrimaryHealthPlanName    = M.MaskedPrimaryHealthPlanName,
+        PrimaryMemberNumber      = M.MaskedPrimaryMemberNumber,
+        PrimaryGroupNumber       = M.MaskedPrimaryGroupNumber,
+        SecondaryHealthPlanName  = M.MaskedSecondaryHealthPlanName,
+        SecondaryMemberNumber    = M.MaskedSecondaryMemberNumber,
+        SecondaryGroupNumber     = M.MaskedSecondaryGroupNumber
     FROM ToMask E
     CROSS APPLY
     (
@@ -155,13 +164,16 @@ BEGIN
             CAST(3000 + (S.Seed % 9000) AS INT)                     AS MaskedCPT,
             CAST(4000 + (S.Seed % 9000) AS INT)                     AS MaskedCPTModifiers,
             CAST(5000 + (S.Seed % 9000) AS INT)                     AS MaskedICD10,
+
+            -- ✅ FIXED SNOMEDCT => numeric
+            CAST(600000 + (S.Seed % 399999) AS INT)                 AS MaskedSNOMEDCT,
+
             CAST(ABS(CHECKSUM('FinClass', S.Seed)) AS INT)          AS MaskedFinancialClass,
             CAST(ABS(CHECKSUM('P-Mem', S.Seed)) AS BIGINT)          AS MaskedPrimaryMemberNumber,
             CAST(ABS(CHECKSUM('P-Grp', S.Seed)) AS BIGINT)          AS MaskedPrimaryGroupNumber,
             CAST(ABS(CHECKSUM('S-Mem', S.Seed)) AS BIGINT)          AS MaskedSecondaryMemberNumber,
             CAST(ABS(CHECKSUM('S-Grp', S.Seed)) AS BIGINT)          AS MaskedSecondaryGroupNumber,
             'General consultation (masked)'                         AS MaskedVisitReason,
-            'SNOMED_MASKED_' + CAST(S.Seed % 100000 AS VARCHAR(6))  AS MaskedSNOMEDCT,
             'Health Plan A (masked)'                                AS MaskedPrimaryHealthPlanName,
             'Health Plan B (masked)'                                AS MaskedSecondaryHealthPlanName,
             DATEADD(DAY, (S.Seed % 365),
@@ -179,7 +191,6 @@ BEGIN
     ) AS M;
 END;
 GO
-
 
 
 ++++++++++++++++++++++++++++++++Appointment++++++++++++++++++++++++++++++++++++++++++
