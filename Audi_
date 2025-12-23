@@ -219,6 +219,68 @@ WHERE s.name = 'AUDSPEC_TERA_Select_Targeted';
 
 
 
++++++++++++++++++++++++++++////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+USE [TERA];
+GO
+
+DECLARE @Targets TABLE (SchemaName SYSNAME, TableName SYSNAME);
+
+INSERT INTO @Targets (SchemaName, TableName)
+VALUES
+    (N's_cdpdynamics', N'APPOINTMENTS'),
+    (N's_cdpdynamics', N'ENCOUNTERS');  -- <-- change to your real tables
+
+DECLARE @sql NVARCHAR(MAX) = N'';
+
+SELECT @sql = @sql + N'
+IF OBJECT_ID(N''' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N''') IS NOT NULL
+AND NOT EXISTS
+(
+    SELECT 1
+    FROM sys.database_audit_specification_details d
+    JOIN sys.database_audit_specifications s
+        ON d.database_specification_id = s.database_specification_id
+    WHERE s.name = N''AUDSPEC_TERA_Select_Targeted''
+      AND d.audit_action_id = N''SL''
+      AND d.major_id = OBJECT_ID(N''' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N''')
+      AND d.audited_principal_id = DATABASE_PRINCIPAL_ID(N''public'')
+)
+BEGIN
+    ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted]
+    ADD (SELECT ON OBJECT::' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N' BY [public]);
+END;'
+FROM @Targets t;
+
+EXEC sys.sp_executesql @sql;
+GO
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+USE [TERA];
+GO
+SELECT
+    s.name AS spec_name,
+    d.audit_action_id,
+    OBJECT_SCHEMA_NAME(d.major_id) AS schema_name,
+    OBJECT_NAME(d.major_id) AS object_name,
+    USER_NAME(d.audited_principal_id) AS audited_principal
+FROM sys.database_audit_specification_details d
+JOIN sys.database_audit_specifications s
+  ON d.database_specification_id = s.database_specification_id
+WHERE s.name = 'AUDSPEC_TERA_Select_Targeted'
+ORDER BY schema_name, object_name;
+
+
+USE [TERA];
+GO
+
+ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted] WITH (STATE = OFF);
+DROP DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted];
+GO
+
+
+
+
 
 
 
