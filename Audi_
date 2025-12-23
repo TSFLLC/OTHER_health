@@ -76,33 +76,46 @@ Replace the table list, then run in TERA:
 
 USE [TERA];
 GO
-
-/* ====== EDIT THIS LIST (add/remove tables) ====== */
+/* ===== EDIT THIS LIST ONLY ===== */
 DECLARE @Targets TABLE (SchemaName SYSNAME, TableName SYSNAME);
+
 INSERT INTO @Targets (SchemaName, TableName)
 VALUES
-    (N'dbo', N'Patient'),
-    (N'dbo', N'Encounter'),
-    (N'dbo', N'CDP_PAT_demographics');   -- <-- examples only, change to your real tables
-/* =============================================== */
+    (N's_cdpdynamics', N'APPOINTMENTS'),
+    (N's_cdpdynamics', N'ENCOUNTERS'),
+    (N's_cdpdynamics', N'CDP_ENCOUNTERS'),
+    (N's_cdpdynamics', N'CDP_PAT_DEMOGRAPHICS');  -- examples only
+/* ================================ */
 
-IF NOT EXISTS (SELECT 1 FROM sys.database_audit_specifications WHERE name = N'AUDSPEC_TERA_Select_Targeted')
+
+/* 1) Create spec if it doesn't exist */
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.database_audit_specifications
+    WHERE name = N'AUDSPEC_TERA_Select_Targeted'
+)
 BEGIN
-    EXEC (N'CREATE DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted]
-            FOR SERVER AUDIT [AUD_Prod_TERAToFile];');
+    CREATE DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted]
+    FOR SERVER AUDIT [AUD_Prod_TERAToFile];
 END
 GO
 
+
+/* 2) Add SELECT ON each table only if missing */
 DECLARE @sql NVARCHAR(MAX) = N'';
+
 SELECT @sql = @sql + N'
-IF NOT EXISTS (
+IF OBJECT_ID(N''' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N''') IS NOT NULL
+AND NOT EXISTS
+(
     SELECT 1
     FROM sys.database_audit_specification_details d
-    JOIN sys.database_audit_specifications s ON d.database_specification_id = s.database_specification_id
+    JOIN sys.database_audit_specifications s
+        ON d.database_specification_id = s.database_specification_id
     WHERE s.name = N''AUDSPEC_TERA_Select_Targeted''
-      AND d.audit_action_name = N''SL''
-      AND d.class_type_desc = N''OBJECT_OR_COLUMN''
+      AND d.audit_action_id = N''SL''   -- SELECT
       AND d.major_id = OBJECT_ID(N''' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N''')
+      AND d.audited_principal_id = DATABASE_PRINCIPAL_ID(N''public'')
 )
 BEGIN
     ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted]
@@ -113,6 +126,8 @@ FROM @Targets t;
 EXEC sys.sp_executesql @sql;
 GO
 
+
+/* 3) Enable spec */
 ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted] WITH (STATE = ON);
 GO
 
@@ -187,6 +202,20 @@ WITH (QUEUE_DELAY = 1000, ON_FAILURE = CONTINUE);
 
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 EXEC xp_fileexist 'R:\SQLAudit\TERA\';
+
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+SELECT name, is_state_enabled
+FROM sys.database_audit_specifications
+WHERE name = 'AUDSPEC_TERA_Select_Targeted';
+
+SELECT s.name, d.audit_action_id, d.major_id, OBJECT_NAME(d.major_id) AS object_name
+FROM sys.database_audit_specification_details d
+JOIN sys.database_audit_specifications s
+  ON d.database_specification_id = s.database_specification_id
+WHERE s.name = 'AUDSPEC_TERA_Select_Targeted';
 
 
 
