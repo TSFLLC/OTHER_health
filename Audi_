@@ -1,0 +1,180 @@
+USE master;
+GO
+
+/* === CONFIGURE THESE === */
+DECLARE @AuditPath NVARCHAR(260) = N'E:\SQLAudit\TERA\';  -- <-- CHANGE ME
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.server_audits WHERE name = N'AUD_Prod_TERAToFile')
+BEGIN
+    EXEC (N'
+    CREATE SERVER AUDIT [AUD_Prod_TERAToFile]
+    TO FILE
+    (
+        FILEPATH = ''' + @AuditPath + N''',
+        MAXSIZE = 1024 MB,
+        MAX_ROLLOVER_FILES = 200,
+        RESERVE_DISK_SPACE = OFF
+    )
+    WITH
+    (
+        QUEUE_DELAY = 1000,
+        ON_FAILURE = CONTINUE
+    );');
+END
+GO
+
+ALTER SERVER AUDIT [AUD_Prod_TERAToFile] WITH (STATE = ON);
+GO
+
+
+++++++++++++++++++++++++ Create Server Audit Specification (logins + security changes)+++///+++++++++++++++++++++++
+USE master;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.server_audit_specifications WHERE name = N'AUDSPEC_Server_Security')
+BEGIN
+    CREATE SERVER AUDIT SPECIFICATION [AUDSPEC_Server_Security]
+    FOR SERVER AUDIT [AUD_Prod_TERAToFile]
+        ADD (FAILED_LOGIN_GROUP),
+        ADD (SUCCESSFUL_LOGIN_GROUP),
+        ADD (SERVER_PRINCIPAL_CHANGE_GROUP),
+        ADD (SERVER_ROLE_MEMBER_CHANGE_GROUP),
+        ADD (SERVER_PERMISSION_CHANGE_GROUP);
+END
+GO
+
+ALTER SERVER AUDIT SPECIFICATION [AUDSPEC_Server_Security] WITH (STATE = ON);
+GO
+
+
++++++++++++++++++///3) Create Database Audit Specification (TERA: schema changes + permission changes------
+
+USE [TERA];
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.database_audit_specifications WHERE name = N'AUDSPEC_TERA_DB_Changes')
+BEGIN
+    CREATE DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_DB_Changes]
+    FOR SERVER AUDIT [AUD_Prod_TERAToFile]
+        ADD (SCHEMA_OBJECT_CHANGE_GROUP),                -- CREATE/ALTER/DROP objects
+        ADD (DATABASE_OBJECT_PERMISSION_CHANGE_GROUP),   -- GRANT/DENY/REVOKE on objects
+        ADD (DATABASE_PRINCIPAL_CHANGE_GROUP),           -- users/roles changes
+        ADD (DATABASE_ROLE_MEMBER_CHANGE_GROUP);         -- role membership changes
+END
+GO
+
+ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_DB_Changes] WITH (STATE = ON);
+GO
+
+
++++++++++++++++++++++++++++++/// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+4) SELECT auditing for TERA
+Option A (Recommended): Audit SELECT only on specific sensitive tables
+
+Replace the table list, then run in TERA:
+
+USE [TERA];
+GO
+
+/* ====== EDIT THIS LIST (add/remove tables) ====== */
+DECLARE @Targets TABLE (SchemaName SYSNAME, TableName SYSNAME);
+INSERT INTO @Targets (SchemaName, TableName)
+VALUES
+    (N'dbo', N'Patient'),
+    (N'dbo', N'Encounter'),
+    (N'dbo', N'CDP_PAT_demographics');   -- <-- examples only, change to your real tables
+/* =============================================== */
+
+IF NOT EXISTS (SELECT 1 FROM sys.database_audit_specifications WHERE name = N'AUDSPEC_TERA_Select_Targeted')
+BEGIN
+    EXEC (N'CREATE DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted]
+            FOR SERVER AUDIT [AUD_Prod_TERAToFile];');
+END
+GO
+
+DECLARE @sql NVARCHAR(MAX) = N'';
+SELECT @sql = @sql + N'
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.database_audit_specification_details d
+    JOIN sys.database_audit_specifications s ON d.database_specification_id = s.database_specification_id
+    WHERE s.name = N''AUDSPEC_TERA_Select_Targeted''
+      AND d.audit_action_name = N''SL''
+      AND d.class_type_desc = N''OBJECT_OR_COLUMN''
+      AND d.major_id = OBJECT_ID(N''' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N''')
+)
+BEGIN
+    ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted]
+    ADD (SELECT ON OBJECT::' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N' BY [public]);
+END;'
+FROM @Targets t;
+
+EXEC sys.sp_executesql @sql;
+GO
+
+ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted] WITH (STATE = ON);
+GO
+
+
++++++++++++++++++++++++++++++///+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Option B (Broad): Audit reads on all schema objects in TERA (high volume)
+Run in TERA:
+
+USE [TERA];
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.database_audit_specifications WHERE name = N'AUDSPEC_TERA_Select_AllSchemaObjects')
+BEGIN
+    CREATE DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_AllSchemaObjects]
+    FOR SERVER AUDIT [AUD_Prod_TERAToFile]
+        ADD (SCHEMA_OBJECT_ACCESS_GROUP);  -- includes SELECT/EXECUTE access to schema objects
+END
+GO
+
+ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_AllSchemaObjects] WITH (STATE = ON);
+GO
+
+
++++++++++++++++++++++++++++++++///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+5) Validation (prove it’s logging)
+Run a test SELECT in TERA, then query audit files:
+
+SELECT TOP (200)
+       event_time,
+       action_id,
+       succeeded,
+       server_principal_name,
+       database_name,
+       schema_name,
+       object_name,
+       statement
+FROM sys.fn_get_audit_file('E:\SQLAudit\TERA\AUD_Prod_TERAToFile*', DEFAULT, DEFAULT)
+WHERE database_name = 'TERA'
+ORDER BY event_time DESC;
+
+
++++++++++++++++++++++++++//////6) Quick disable / rollback (if needed)+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+USE [TERA];
+GO
+IF EXISTS (SELECT 1 FROM sys.database_audit_specifications WHERE name = N'AUDSPEC_TERA_Select_AllSchemaObjects')
+BEGIN
+    ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_AllSchemaObjects] WITH (STATE = OFF);
+END
+
+IF EXISTS (SELECT 1 FROM sys.database_audit_specifications WHERE name = N'AUDSPEC_TERA_Select_Targeted')
+BEGIN
+    ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted] WITH (STATE = OFF);
+END
+GO
+
+USE master;
+GO
+ALTER SERVER AUDIT SPECIFICATION [AUDSPEC_Server_Security] WITH (STATE = OFF);
+ALTER SERVER AUDIT [AUD_Prod_TERAToFile] WITH (STATE = OFF);
+GO
+
+
+
+
+
