@@ -1,0 +1,298 @@
+USE [TERA];
+GO
+
+/* ====== 0) Ensure schema exists for governance objects ====== */
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'B_hipaattizer')
+    EXEC(N'CREATE SCHEMA [B_hipaattizer] AUTHORIZATION [dbo];');
+GO
+
+/* ====== 1) Backfill (static masking) existing rows ======
+   Mask rules:
+   - Numeric IDs -> deterministic pseudo-number via CHECKSUM
+   - String IDs  -> keep last 4 chars, replace rest with X
+   - GUIDs       -> deterministic GUID derived from MD5
+*/
+
+UPDATE T
+SET
+    PatEncCsnId =
+        CASE
+            WHEN TRY_CONVERT(bigint, T.PatEncCsnId) IS NOT NULL
+                THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), T.PatEncCsnId), '|CSN'))))
+            WHEN TRY_CONVERT(uniqueidentifier, T.PatEncCsnId) IS NOT NULL
+                THEN TRY_CONVERT(uniqueidentifier,
+                    STUFF(STUFF(STUFF(STUFF(
+                        LOWER(CONVERT(varchar(32), HASHBYTES('MD5', CONVERT(varbinary(16), TRY_CONVERT(uniqueidentifier, T.PatEncCsnId))), 2)),
+                        9, 0, '-'), 14, 0, '-'), 19, 0, '-'), 24, 0, '-')
+                )
+            ELSE
+                REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), T.PatEncCsnId)) > 4 THEN LEN(CONVERT(nvarchar(4000), T.PatEncCsnId)) - 4 ELSE 0 END)
+                + RIGHT(CONVERT(nvarchar(4000), T.PatEncCsnId), 4)
+        END,
+
+    PatId =
+        CASE
+            WHEN TRY_CONVERT(bigint, T.PatId) IS NOT NULL
+                THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), T.PatId), '|PAT'))))
+            WHEN TRY_CONVERT(uniqueidentifier, T.PatId) IS NOT NULL
+                THEN TRY_CONVERT(uniqueidentifier,
+                    STUFF(STUFF(STUFF(STUFF(
+                        LOWER(CONVERT(varchar(32), HASHBYTES('MD5', CONVERT(varbinary(16), TRY_CONVERT(uniqueidentifier, T.PatId))), 2)),
+                        9, 0, '-'), 14, 0, '-'), 19, 0, '-'), 24, 0, '-')
+                )
+            ELSE
+                REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), T.PatId)) > 4 THEN LEN(CONVERT(nvarchar(4000), T.PatId)) - 4 ELSE 0 END)
+                + RIGHT(CONVERT(nvarchar(4000), T.PatId), 4)
+        END,
+
+    ReferralId =
+        CASE
+            WHEN TRY_CONVERT(bigint, T.ReferralId) IS NOT NULL
+                THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), T.ReferralId), '|REF'))))
+            WHEN TRY_CONVERT(uniqueidentifier, T.ReferralId) IS NOT NULL
+                THEN TRY_CONVERT(uniqueidentifier,
+                    STUFF(STUFF(STUFF(STUFF(
+                        LOWER(CONVERT(varchar(32), HASHBYTES('MD5', CONVERT(varbinary(16), TRY_CONVERT(uniqueidentifier, T.ReferralId))), 2)),
+                        9, 0, '-'), 14, 0, '-'), 19, 0, '-'), 24, 0, '-')
+                )
+            ELSE
+                REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), T.ReferralId)) > 4 THEN LEN(CONVERT(nvarchar(4000), T.ReferralId)) - 4 ELSE 0 END)
+                + RIGHT(CONVERT(nvarchar(4000), T.ReferralId), 4)
+        END
+FROM [B_epic].[VSchedAppt] T;
+GO
+
+
++++++++++++++++++++++++++++++++++++++++++++++++trigger VSchedAppt+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+USE [TERA];
+GO
+
+/* ====== Trigger: keep critical fields masked on INSERT/UPDATE ======
+   Optional ETL bypass:
+     EXEC sys.sp_set_session_context @key=N'BYPASS_MASKING', @value=1;
+*/
+
+CREATE OR ALTER TRIGGER [B_hipaattizer].[trg_mask_VSchedAppt_Critical]
+ON [B_epic].[VSchedAppt]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Allow SSIS/ETL or approved jobs to bypass masking
+    IF TRY_CONVERT(int, SESSION_CONTEXT(N'BYPASS_MASKING')) = 1
+        RETURN;
+
+    UPDATE T
+    SET
+        PatEncCsnId =
+            CASE
+                WHEN TRY_CONVERT(bigint, i.PatEncCsnId) IS NOT NULL
+                    THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), i.PatEncCsnId), '|CSN'))))
+                WHEN TRY_CONVERT(uniqueidentifier, i.PatEncCsnId) IS NOT NULL
+                    THEN TRY_CONVERT(uniqueidentifier,
+                        STUFF(STUFF(STUFF(STUFF(
+                            LOWER(CONVERT(varchar(32), HASHBYTES('MD5', CONVERT(varbinary(16), TRY_CONVERT(uniqueidentifier, i.PatEncCsnId))), 2)),
+                            9, 0, '-'), 14, 0, '-'), 19, 0, '-'), 24, 0, '-')
+                    )
+                ELSE
+                    REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), i.PatEncCsnId)) > 4 THEN LEN(CONVERT(nvarchar(4000), i.PatEncCsnId)) - 4 ELSE 0 END)
+                    + RIGHT(CONVERT(nvarchar(4000), i.PatEncCsnId), 4)
+            END,
+
+        PatId =
+            CASE
+                WHEN TRY_CONVERT(bigint, i.PatId) IS NOT NULL
+                    THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), i.PatId), '|PAT'))))
+                WHEN TRY_CONVERT(uniqueidentifier, i.PatId) IS NOT NULL
+                    THEN TRY_CONVERT(uniqueidentifier,
+                        STUFF(STUFF(STUFF(STUFF(
+                            LOWER(CONVERT(varchar(32), HASHBYTES('MD5', CONVERT(varbinary(16), TRY_CONVERT(uniqueidentifier, i.PatId))), 2)),
+                            9, 0, '-'), 14, 0, '-'), 19, 0, '-'), 24, 0, '-')
+                    )
+                ELSE
+                    REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), i.PatId)) > 4 THEN LEN(CONVERT(nvarchar(4000), i.PatId)) - 4 ELSE 0 END)
+                    + RIGHT(CONVERT(nvarchar(4000), i.PatId), 4)
+            END,
+
+        ReferralId =
+            CASE
+                WHEN TRY_CONVERT(bigint, i.ReferralId) IS NOT NULL
+                    THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), i.ReferralId), '|REF'))))
+                WHEN TRY_CONVERT(uniqueidentifier, i.ReferralId) IS NOT NULL
+                    THEN TRY_CONVERT(uniqueidentifier,
+                        STUFF(STUFF(STUFF(STUFF(
+                            LOWER(CONVERT(varchar(32), HASHBYTES('MD5', CONVERT(varbinary(16), TRY_CONVERT(uniqueidentifier, i.ReferralId))), 2)),
+                            9, 0, '-'), 14, 0, '-'), 19, 0, '-'), 24, 0, '-')
+                    )
+                ELSE
+                    REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), i.ReferralId)) > 4 THEN LEN(CONVERT(nvarchar(4000), i.ReferralId)) - 4 ELSE 0 END)
+                    + RIGHT(CONVERT(nvarchar(4000), i.ReferralId), 4)
+            END
+    FROM [B_epic].[VSchedAppt] T
+    INNER JOIN inserted i
+        ON T.PatEncCsnId = i.PatEncCsnId;   -- assumes CSN identifies the row
+END;
+GO
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++/////Masking PatEnc++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+/* ===== Ensure schema exists ===== */
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'B_hipaattizer')
+    EXEC(N'CREATE SCHEMA [B_hipaattizer] AUTHORIZATION [dbo];');
+GO
+
+/* ===== Backfill: mask existing data ===== */
+UPDATE T
+SET
+    /* ===== Critical identifiers ===== */
+    PatEncCsnId = CASE
+        WHEN T.PatEncCsnId IS NULL THEN NULL
+        WHEN TRY_CONVERT(bigint, T.PatEncCsnId) IS NOT NULL
+            THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), T.PatEncCsnId), '|CSN'))))
+        ELSE
+            REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), T.PatEncCsnId)) > 4 THEN LEN(CONVERT(nvarchar(4000), T.PatEncCsnId)) - 4 ELSE 0 END)
+            + RIGHT(CONVERT(nvarchar(4000), T.PatEncCsnId), 4)
+    END,
+
+    PatId = CASE
+        WHEN T.PatId IS NULL THEN NULL
+        WHEN TRY_CONVERT(bigint, T.PatId) IS NOT NULL
+            THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), T.PatId), '|PAT'))))
+        ELSE
+            REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), T.PatId)) > 4 THEN LEN(CONVERT(nvarchar(4000), T.PatId)) - 4 ELSE 0 END)
+            + RIGHT(CONVERT(nvarchar(4000), T.PatId), 4)
+    END,
+
+    AccountId = CASE
+        WHEN T.AccountId IS NULL THEN NULL
+        WHEN TRY_CONVERT(bigint, T.AccountId) IS NOT NULL
+            THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), T.AccountId), '|ACCT'))))
+        ELSE
+            REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), T.AccountId)) > 4 THEN LEN(CONVERT(nvarchar(4000), T.AccountId)) - 4 ELSE 0 END)
+            + RIGHT(CONVERT(nvarchar(4000), T.AccountId), 4)
+    END,
+
+    HspAccountId = CASE
+        WHEN T.HspAccountId IS NULL THEN NULL
+        WHEN TRY_CONVERT(bigint, T.HspAccountId) IS NOT NULL
+            THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), T.HspAccountId), '|HSP'))))
+        ELSE
+            REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), T.HspAccountId)) > 4 THEN LEN(CONVERT(nvarchar(4000), T.HspAccountId)) - 4 ELSE 0 END)
+            + RIGHT(CONVERT(nvarchar(4000), T.HspAccountId), 4)
+    END,
+
+    ClaimId = CASE
+        WHEN T.ClaimId IS NULL THEN NULL
+        WHEN TRY_CONVERT(bigint, T.ClaimId) IS NOT NULL
+            THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), T.ClaimId), '|CLM'))))
+        ELSE
+            REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), T.ClaimId)) > 4 THEN LEN(CONVERT(nvarchar(4000), T.ClaimId)) - 4 ELSE 0 END)
+            + RIGHT(CONVERT(nvarchar(4000), T.ClaimId), 4)
+    END,
+
+    ReferralId = CASE
+        WHEN T.ReferralId IS NULL THEN NULL
+        WHEN TRY_CONVERT(bigint, T.ReferralId) IS NOT NULL
+            THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), T.ReferralId), '|REF'))))
+        ELSE
+            REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), T.ReferralId)) > 4 THEN LEN(CONVERT(nvarchar(4000), T.ReferralId)) - 4 ELSE 0 END)
+            + RIGHT(CONVERT(nvarchar(4000), T.ReferralId), 4)
+    END,
+
+    /* ===== Moderate PHI (optional) ===== */
+    ContactDate     = CASE WHEN @IncludeModerate = 1 AND T.ContactDate IS NOT NULL     THEN DATEADD(day, ABS(CHECKSUM(CONCAT(CONVERT(varchar(30),T.ContactDate,126),'|CD'))) % 3650, '2000-01-01') ELSE T.ContactDate END,
+    HospAdmitTime   = CASE WHEN @IncludeModerate = 1 AND T.HospAdmitTime IS NOT NULL   THEN DATEADD(minute, ABS(CHECKSUM(CONCAT(CONVERT(varchar(30),T.HospAdmitTime,126),'|AD'))) % 1440, CONVERT(date, '2000-01-01')) ELSE T.HospAdmitTime END,
+    HospDischrgTime = CASE WHEN @IncludeModerate = 1 AND T.HospDischrgTime IS NOT NULL THEN DATEADD(minute, ABS(CHECKSUM(CONCAT(CONVERT(varchar(30),T.HospDischrgTime,126),'|DS'))) % 1440, CONVERT(date, '2000-01-02')) ELSE T.HospDischrgTime END,
+    ApptMadeDate    = CASE WHEN @IncludeModerate = 1 AND T.ApptMadeDate IS NOT NULL    THEN DATEADD(day, ABS(CHECKSUM(CONCAT(CONVERT(varchar(30),T.ApptMadeDate,126),'|AMD'))) % 3650, '2000-01-03') ELSE T.ApptMadeDate END,
+    ApptTime        = CASE WHEN @IncludeModerate = 1 AND T.ApptTime IS NOT NULL        THEN DATEADD(minute, ABS(CHECKSUM(CONCAT(CONVERT(varchar(30),T.ApptTime,126),'|AT'))) % 1440, CONVERT(date, '2000-01-04')) ELSE T.ApptTime END,
+    UpdateDate      = CASE WHEN @IncludeModerate = 1 AND T.UpdateDate IS NOT NULL      THEN DATEADD(day, ABS(CHECKSUM(CONCAT(CONVERT(varchar(30),T.UpdateDate,126),'|UD'))) % 3650, '2000-01-05') ELSE T.UpdateDate END
+FROM [B_epic].[PatEnc] T;
+GO
+
+
+++++++++++++++++++++++++++++++++++++Tigger PatEnc_ +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+CREATE OR ALTER TRIGGER [B_hipaattizer].[trg_mask_PatEnc_PHI_PII]
+ON [B_epic].[PatEnc]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    /* Optional bypass for SSIS/ETL */
+    IF TRY_CONVERT(int, SESSION_CONTEXT(N'BYPASS_MASKING')) = 1
+        RETURN;
+
+    DECLARE @IncludeModerate bit = 0;  -- change to 1 if you want to mask dates/times in trigger too
+
+    UPDATE T
+    SET
+        /* ===== Critical identifiers ===== */
+        PatEncCsnId = CASE
+            WHEN i.PatEncCsnId IS NULL THEN NULL
+            WHEN TRY_CONVERT(bigint, i.PatEncCsnId) IS NOT NULL
+                THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), i.PatEncCsnId), '|CSN'))))
+            ELSE
+                REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), i.PatEncCsnId)) > 4 THEN LEN(CONVERT(nvarchar(4000), i.PatEncCsnId)) - 4 ELSE 0 END)
+                + RIGHT(CONVERT(nvarchar(4000), i.PatEncCsnId), 4)
+        END,
+
+        PatId = CASE
+            WHEN i.PatId IS NULL THEN NULL
+            WHEN TRY_CONVERT(bigint, i.PatId) IS NOT NULL
+                THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), i.PatId), '|PAT'))))
+            ELSE
+                REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), i.PatId)) > 4 THEN LEN(CONVERT(nvarchar(4000), i.PatId)) - 4 ELSE 0 END)
+                + RIGHT(CONVERT(nvarchar(4000), i.PatId), 4)
+        END,
+
+        AccountId = CASE
+            WHEN i.AccountId IS NULL THEN NULL
+            WHEN TRY_CONVERT(bigint, i.AccountId) IS NOT NULL
+                THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), i.AccountId), '|ACCT'))))
+            ELSE
+                REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), i.AccountId)) > 4 THEN LEN(CONVERT(nvarchar(4000), i.AccountId)) - 4 ELSE 0 END)
+                + RIGHT(CONVERT(nvarchar(4000), i.AccountId), 4)
+        END,
+
+        HspAccountId = CASE
+            WHEN i.HspAccountId IS NULL THEN NULL
+            WHEN TRY_CONVERT(bigint, i.HspAccountId) IS NOT NULL
+                THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), i.HspAccountId), '|HSP'))))
+            ELSE
+                REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), i.HspAccountId)) > 4 THEN LEN(CONVERT(nvarchar(4000), i.HspAccountId)) - 4 ELSE 0 END)
+                + RIGHT(CONVERT(nvarchar(4000), i.HspAccountId), 4)
+        END,
+
+        ClaimId = CASE
+            WHEN i.ClaimId IS NULL THEN NULL
+            WHEN TRY_CONVERT(bigint, i.ClaimId) IS NOT NULL
+                THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), i.ClaimId), '|CLM'))))
+            ELSE
+                REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), i.ClaimId)) > 4 THEN LEN(CONVERT(nvarchar(4000), i.ClaimId)) - 4 ELSE 0 END)
+                + RIGHT(CONVERT(nvarchar(4000), i.ClaimId), 4)
+        END,
+
+        ReferralId = CASE
+            WHEN i.ReferralId IS NULL THEN NULL
+            WHEN TRY_CONVERT(bigint, i.ReferralId) IS NOT NULL
+                THEN CONVERT(bigint, ABS(CHECKSUM(CONCAT(CONVERT(varchar(50), i.ReferralId), '|REF'))))
+            ELSE
+                REPLICATE('X', CASE WHEN LEN(CONVERT(nvarchar(4000), i.ReferralId)) > 4 THEN LEN(CONVERT(nvarchar(4000), i.ReferralId)) - 4 ELSE 0 END)
+                + RIGHT(CONVERT(nvarchar(4000), i.ReferralId), 4)
+        END,
+
+        /* ===== Moderate PHI (optional) ===== */
+        ContactDate     = CASE WHEN @IncludeModerate = 1 AND i.ContactDate IS NOT NULL     THEN DATEADD(day, ABS(CHECKSUM(CONCAT(CONVERT(varchar(30),i.ContactDate,126),'|CD'))) % 3650, '2000-01-01') ELSE T.ContactDate END,
+        HospAdmitTime   = CASE WHEN @IncludeModerate = 1 AND i.HospAdmitTime IS NOT NULL   THEN DATEADD(minute, ABS(CHECKSUM(CONCAT(CONVERT(varchar(30),i.HospAdmitTime,126),'|AD'))) % 1440, CONVERT(date, '2000-01-01')) ELSE T.HospAdmitTime END,
+        HospDischrgTime = CASE WHEN @IncludeModerate = 1 AND i.HospDischrgTime IS NOT NULL THEN DATEADD(minute, ABS(CHECKSUM(CONCAT(CONVERT(varchar(30),i.HospDischrgTime,126),'|DS'))) % 1440, CONVERT(date, '2000-01-02')) ELSE T.HospDischrgTime END,
+        ApptMadeDate    = CASE WHEN @IncludeModerate = 1 AND i.ApptMadeDate IS NOT NULL    THEN DATEADD(day, ABS(CHECKSUM(CONCAT(CONVERT(varchar(30),i.ApptMadeDate,126),'|AMD'))) % 3650, '2000-01-03') ELSE T.ApptMadeDate END,
+        ApptTime        = CASE WHEN @IncludeModerate = 1 AND i.ApptTime IS NOT NULL        THEN DATEADD(minute, ABS(CHECKSUM(CONCAT(CONVERT(varchar(30),i.ApptTime,126),'|AT'))) % 1440, CONVERT(date, '2000-01-04')) ELSE T.ApptTime END,
+        UpdateDate      = CASE WHEN @IncludeModerate = 1 AND i.UpdateDate IS NOT NULL      THEN DATEADD(day, ABS(CHECKSUM(CONCAT(CONVERT(varchar(30),i.UpdateDate,126),'|UD'))) % 3650, '2000-01-05') ELSE T.UpdateDate END
+    FROM [B_epic].[PatEnc] T
+    INNER JOIN inserted i
+        ON T.PatEncCsnId = i.PatEncCsnId;
+END;
+GO
