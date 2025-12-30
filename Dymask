@@ -1,0 +1,71 @@
+++++dynamic masking for Identity serID+++++++++++++++++++++
+USE [TERA];
+GO
+
+/* IdentityId (nvarchar / identifier) */
+ALTER TABLE [B_epic].[IdentitySerId]
+ALTER COLUMN [IdentityId]
+ADD MASKED WITH (FUNCTION = 'partial(0,"XXXXXXX",4)');
+GO
+
+/* MPI ID From Date */
+ALTER TABLE [B_epic].[IdentitySerId]
+ALTER COLUMN [MpiIdFromDate]
+ADD MASKED WITH (FUNCTION = 'default()');
+GO
+
+/* MPI ID To Date */
+ALTER TABLE [B_epic].[IdentitySerId]
+ALTER COLUMN [MpiIdToDate]
+ADD MASKED WITH (FUNCTION = 'default()');
+GO
+
++++++++++++++++++++++++++///Rollback++++++++++++++++++++++++++++++++++++
+
+ALTER TABLE [B_epic].[IdentitySerId] ALTER COLUMN [IdentityId] DROP MASKED;
+ALTER TABLE [B_epic].[IdentitySerId] ALTER COLUMN [MpiIdFromDate] DROP MASKED;
+ALTER TABLE [B_epic].[IdentitySerId] ALTER COLUMN [MpiIdToDate] DROP MASKED;
+GO
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+---Verify Masking (run as non-UNMASK user)
+SELECT TOP 20
+    IdentityId,
+    MpiIdFromDate,
+    MpiIdToDate
+FROM [B_epic].[IdentitySerId];
+
+
+--expected output
+XXXXXXX1234   1900-01-01   1900-01-01
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+--Allow privileged users to see real values (optional)
+GRANT UNMASK TO [Your_AD_Group_or_User];
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+To remove access:
+REVOKE UNMASK FROM [Your_AD_Group_or_User];
+++++++++++++++++++++++++++++++++++++++++
+
+
+
+
+
+
+0000000000000000000000000000000000000000000Add dynamic masking  VTeraAvailibility00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+USE [TERA];
+GO
+
+-- Add DDM to CSN (nvarchar)
+ALTER TABLE [B_epic].[VTeraAvailibility]
+ALTER COLUMN [Csn] ADD MASKED WITH (FUNCTION = 'partial(0,"XXXXXXX",4)');
+GO
+
++++++++++++++++++++++++roll back+++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+ALTER TABLE [B_epic].[VTeraAvailibility]
+ALTER COLUMN [Csn] DROP MASKED;
+GO
+
