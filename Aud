@@ -1,0 +1,347 @@
+Daily Audit Report (last 24 hours) — TERA
+DECLARE @AuditPath NVARCHAR(4000) = N'E:\SQLAudit\TERA\*.sqlaudit';
+DECLARE @Since DATETIME2(0) = DATEADD(DAY, -1, SYSDATETIME());
+
+SELECT
+    event_time,
+    CASE action_id
+        WHEN 'DR'   THEN 'DROP (DDL)'
+        WHEN 'CR'   THEN 'CREATE (DDL)'
+        WHEN 'AL'   THEN 'ALTER (DDL)'
+        WHEN 'LGIS' THEN 'LOGIN SUCCESS'
+        WHEN 'LGIF' THEN 'LOGIN FAILED'
+        ELSE action_id
+    END AS EventType,
+    server_principal_name  AS LoginName,
+    database_name,
+    schema_name,
+    object_name,
+    client_ip,
+    application_name,
+    succeeded,
+    statement
+FROM sys.fn_get_audit_file(@AuditPath, NULL, NULL)
+WHERE event_time >= @Since
+  AND (
+        database_name = 'TERA'
+        OR action_id IN ('LGIS','LGIF')   -- logins are server-level; no db name
+      )
+  AND action_id IN ('DR','CR','AL','LGIS','LGIF')
+ORDER BY event_time DESC;
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Daily Summary Counts (quick manager view)
+
+DECLARE @AuditPath NVARCHAR(4000) = N'E:\SQLAudit\TERA\*.sqlaudit';
+DECLARE @Since DATETIME2(0) = DATEADD(DAY, -1, SYSDATETIME());
+
+SELECT
+    CASE action_id
+        WHEN 'DR'   THEN 'DROP (DDL)'
+        WHEN 'CR'   THEN 'CREATE (DDL)'
+        WHEN 'AL'   THEN 'ALTER (DDL)'
+        WHEN 'LGIS' THEN 'LOGIN SUCCESS'
+        WHEN 'LGIF' THEN 'LOGIN FAILED'
+        ELSE action_id
+    END AS EventType,
+    COUNT(*) AS EventCount
+FROM sys.fn_get_audit_file(@AuditPath, NULL, NULL)
+WHERE event_time >= @Since
+  AND (
+        database_name = 'TERA'
+        OR action_id IN ('LGIS','LGIF')
+      )
+  AND action_id IN ('DR','CR','AL','LGIS','LGIF')
+GROUP BY action_id
+ORDER BY EventCount DESC;
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
++++++++++++++++Optional: Only “high risk” daily report (DROP + failed logins)+++++++++++++++++++++++++++++
+DECLARE @AuditPath NVARCHAR(4000) = N'E:\SQLAudit\TERA\*.sqlaudit';
+DECLARE @Since DATETIME2(0) = DATEADD(DAY, -1, SYSDATETIME());
+
+SELECT
+    event_time,
+    CASE action_id
+        WHEN 'DR'   THEN 'DROP (DDL)'
+        WHEN 'LGIF' THEN 'LOGIN FAILED'
+        ELSE action_id
+    END AS EventType,
+    server_principal_name AS LoginName,
+    database_name,
+    schema_name,
+    object_name,
+    client_ip,
+    application_name,
+    succeeded,
+    statement
+FROM sys.fn_get_audit_file(@AuditPath, NULL, NULL)
+WHERE event_time >= @Since
+  AND (
+        database_name = 'TERA'
+        OR action_id = 'LGIF'
+      )
+  AND action_id IN ('DR','LGIF')
+ORDER BY event_time DESC;
+
+
+///////////////////////////////////////////////////FULLY AUTOMATED////////////////////////////////////////
+A) One-time setup: table + procedure (stores + emails)
+
+USE [TERA];
+GO
+
+/* 1) Table to store daily audit report rows */
+IF OBJECT_ID('dbo.DailyAuditReport', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.DailyAuditReport
+    (
+        ReportId            bigint IDENTITY(1,1) PRIMARY KEY,
+        RunDate             datetime2(0) NOT NULL DEFAULT SYSDATETIME(),
+        EventTime           datetime2(0) NULL,
+        EventType           nvarchar(50) NULL,
+        ActionId            nvarchar(10) NULL,
+        LoginName           nvarchar(256) NULL,
+        DatabaseName        nvarchar(256) NULL,
+        SchemaName          nvarchar(256) NULL,
+        ObjectName          nvarchar(256) NULL,
+        ClientIP            nvarchar(64) NULL,
+        ApplicationName     nvarchar(256) NULL,
+        Succeeded           bit NULL,
+        StatementText       nvarchar(max) NULL
+    );
+
+    CREATE INDEX IX_DailyAuditReport_RunDate ON dbo.DailyAuditReport(RunDate);
+    CREATE INDEX IX_DailyAuditReport_EventTime ON dbo.DailyAuditReport(EventTime);
+END
+GO
+
+/* 2) Stored procedure: loads last 24h + emails summary + details */
+CREATE OR ALTER PROCEDURE dbo.usp_RunDailyAuditReport_TERA
+(
+      @AuditPath      nvarchar(4000)   -- e.g. 'E:\SQLAudit\TERA\*.sqlaudit'
+    , @LookbackHours  int = 24
+    , @MailProfile    sysname = NULL   -- if NULL, uses default DB mail profile
+    , @Recipients     nvarchar(4000)   -- 'name@company.com;name2@company.com'
+)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @Since datetime2(0) = DATEADD(HOUR, -@LookbackHours, SYSDATETIME());
+    DECLARE @RunDate datetime2(0) = SYSDATETIME();
+
+    /* Insert details into table */
+    INSERT INTO dbo.DailyAuditReport
+    (
+        RunDate, EventTime, EventType, ActionId, LoginName, DatabaseName, SchemaName, ObjectName,
+        ClientIP, ApplicationName, Succeeded, StatementText
+    )
+    SELECT
+        @RunDate AS RunDate,
+        event_time AS EventTime,
+        CASE action_id
+            WHEN 'DR'   THEN 'DROP (DDL)'
+            WHEN 'CR'   THEN 'CREATE (DDL)'
+            WHEN 'AL'   THEN 'ALTER (DDL)'
+            WHEN 'LGIS' THEN 'LOGIN SUCCESS'
+            WHEN 'LGIF' THEN 'LOGIN FAILED'
+            ELSE action_id
+        END AS EventType,
+        action_id AS ActionId,
+        server_principal_name AS LoginName,
+        database_name AS DatabaseName,
+        schema_name AS SchemaName,
+        object_name AS ObjectName,
+        client_ip,
+        application_name,
+        succeeded,
+        statement AS StatementText
+    FROM sys.fn_get_audit_file(@AuditPath, NULL, NULL)
+    WHERE event_time >= @Since
+      AND (
+            database_name = 'TERA'
+            OR action_id IN ('LGIS','LGIF')   -- server-level
+          )
+      AND action_id IN ('DR','CR','AL','LGIS','LGIF');
+
+    /* Build summary */
+    DECLARE @Summary nvarchar(max) =
+    (
+        SELECT STRING_AGG(CONCAT(EventType, ': ', EventCount), CHAR(13)+CHAR(10))
+        FROM
+        (
+            SELECT
+                CASE ActionId
+                    WHEN 'DR'   THEN 'DROP (DDL)'
+                    WHEN 'CR'   THEN 'CREATE (DDL)'
+                    WHEN 'AL'   THEN 'ALTER (DDL)'
+                    WHEN 'LGIS' THEN 'LOGIN SUCCESS'
+                    WHEN 'LGIF' THEN 'LOGIN FAILED'
+                    ELSE ActionId
+                END AS EventType,
+                COUNT(*) AS EventCount
+            FROM dbo.DailyAuditReport
+            WHERE RunDate = @RunDate
+            GROUP BY ActionId
+        ) S
+    );
+
+    IF @Summary IS NULL SET @Summary = N'No matching events found in the last ' + CAST(@LookbackHours AS nvarchar(10)) + N' hours.';
+
+    /* Build “top details” HTML (keeps email readable) */
+    DECLARE @Body nvarchar(max) = N'
+    <h3>TERA Daily SQL Audit Report</h3>
+    <p><b>Window:</b> Last ' + CAST(@LookbackHours AS nvarchar(10)) + N' hours<br/>
+       <b>Run time:</b> ' + CONVERT(nvarchar(30), @RunDate, 120) + N'</p>
+    <h4>Summary</h4>
+    <pre>' + ISNULL(@Summary, N'') + N'</pre>
+    <h4>Most Recent Events (Top 200)</h4>
+    <table border="1" cellpadding="4" cellspacing="0">
+      <tr>
+        <th>EventTime</th><th>Type</th><th>Login</th><th>DB</th><th>Schema</th><th>Object</th>
+        <th>ClientIP</th><th>App</th><th>Success</th><th>Statement</th>
+      </tr>' +
+    ISNULL((
+        SELECT TOP (200)
+            N'<tr><td>' + CONVERT(nvarchar(30), EventTime, 120) + N'</td>' +
+            N'<td>' + ISNULL(EventType, N'') + N'</td>' +
+            N'<td>' + ISNULL(LoginName, N'') + N'</td>' +
+            N'<td>' + ISNULL(DatabaseName, N'') + N'</td>' +
+            N'<td>' + ISNULL(SchemaName, N'') + N'</td>' +
+            N'<td>' + ISNULL(ObjectName, N'') + N'</td>' +
+            N'<td>' + ISNULL(ClientIP, N'') + N'</td>' +
+            N'<td>' + ISNULL(ApplicationName, N'') + N'</td>' +
+            N'<td>' + COALESCE(CASE WHEN Succeeded = 1 THEN N'1' WHEN Succeeded = 0 THEN N'0' END, N'') + N'</td>' +
+            N'<td>' + REPLACE(ISNULL(LEFT(StatementText, 500), N''), N'<', N'&lt;') + N'</td></tr>'
+        FROM dbo.DailyAuditReport
+        WHERE RunDate = @RunDate
+        ORDER BY EventTime DESC
+        FOR XML PATH(''), TYPE
+    ).value('.', 'nvarchar(max)'), N'') +
+    N'</table>
+    <p><i>Full details are stored in [TERA].[dbo].[DailyAuditReport] with RunDate = ' + CONVERT(nvarchar(30), @RunDate, 120) + N'.</i></p>';
+
+    /* Send email via Database Mail */
+    EXEC msdb.dbo.sp_send_dbmail
+        @profile_name = @MailProfile,
+        @recipients   = @Recipients,
+        @subject      = CONCAT('TERA Daily SQL Audit Report - ', CONVERT(nvarchar(10), CAST(@RunDate AS date), 120)),
+        @body         = @Body,
+        @body_format  = 'HTML';
+END
+GO
+
+-----*//*++++++++++++++++++++++++++++++++++++B) SQL Agent Job (daily schedule)
+
+Run this in msdb.
+Replace:
+
+@AuditPath
+
+@OperatorEmail
+
+schedule time (example below is 07:00 AM)++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//*
+
+USE msdb;
+GO
+
+DECLARE @JobName sysname = N'TERA - Daily SQL Audit Report';
+DECLARE @AuditPath nvarchar(4000) = N'E:\SQLAudit\TERA\*.sqlaudit';
+DECLARE @OperatorEmail nvarchar(4000) = N'your.email@company.com';  -- <-- change
+
+/* 1) Create the job */
+IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = @JobName)
+BEGIN
+    EXEC msdb.dbo.sp_add_job
+        @job_name = @JobName,
+        @enabled = 1,
+        @description = N'Runs daily SQL Audit report for TERA, stores to table, emails summary + top events.',
+        @category_name = N'Database Maintenance';
+END
+GO
+
+/* 2) Add job step */
+IF NOT EXISTS
+(
+    SELECT 1
+    FROM msdb.dbo.sysjobsteps s
+    JOIN msdb.dbo.sysjobs j ON j.job_id = s.job_id
+    WHERE j.name = N'TERA - Daily SQL Audit Report'
+      AND s.step_name = N'Run Audit Report'
+)
+BEGIN
+    EXEC msdb.dbo.sp_add_jobstep
+        @job_name = N'TERA - Daily SQL Audit Report',
+        @step_name = N'Run Audit Report',
+        @subsystem = N'TSQL',
+        @database_name = N'TERA',
+        @command = N'
+DECLARE @AuditPath nvarchar(4000) = N''' + REPLACE(@AuditPath,'''','''''') + N''';
+DECLARE @Recipients nvarchar(4000) = N''' + REPLACE(@OperatorEmail,'''','''''') + N''';
+
+EXEC dbo.usp_RunDailyAuditReport_TERA
+      @AuditPath = @AuditPath
+    , @LookbackHours = 24
+    , @MailProfile = NULL
+    , @Recipients = @Recipients;
+';
+END
+GO
+
+/* 3) Daily schedule at 07:00 AM */
+IF NOT EXISTS
+(
+    SELECT 1
+    FROM msdb.dbo.sysschedules
+    WHERE name = N'TERA - Daily SQL Audit Report - 7AM'
+)
+BEGIN
+    EXEC msdb.dbo.sp_add_schedule
+        @schedule_name = N'TERA - Daily SQL Audit Report - 7AM',
+        @enabled = 1,
+        @freq_type = 4,             -- daily
+        @freq_interval = 1,         -- every day
+        @active_start_time = 070000;-- 07:00:00
+END
+GO
+
+/* Attach schedule to job */
+EXEC msdb.dbo.sp_attach_schedule
+    @job_name = N'TERA - Daily SQL Audit Report',
+    @schedule_name = N'TERA - Daily SQL Audit Report - 7AM';
+GO
+
+/* Add job to local server */
+EXEC msdb.dbo.sp_add_jobserver
+    @job_name = N'TERA - Daily SQL Audit Report';
+GO
+
+
+++++++++++++++++++++++++++++++++++Quick validation (run now), Run procedure manually:++++++++++++++++++++++++++++++++
+
+
+EXEC [TERA].dbo.usp_RunDailyAuditReport_TERA
+    @AuditPath = N'E:\SQLAudit\TERA\*.sqlaudit',
+    @LookbackHours = 24,
+    @MailProfile = NULL,
+    @Recipients = N'your.email@company.com';
+
+
+
+++++++++++++++Check store procedure
+
+SELECT TOP 200 *
+FROM [TERA].[dbo].[DailyAuditReport]
+ORDER BY RunDate DESC, EventTime DESC;
+
+
+SELECT * FROM msdb.dbo.sysmail_profile;
+
+
+
+
+
+
+
+
