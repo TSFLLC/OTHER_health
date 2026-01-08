@@ -96,3 +96,95 @@ ORDER BY schema_name, object_name;
 
 
 
+
+
+
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+USE [TERA];
+GO
+
+SELECT
+    das.name AS db_audit_spec_name,
+    sa.name  AS server_audit_name,
+    das.is_state_enabled
+FROM sys.database_audit_specifications das
+JOIN sys.server_audits sa
+  ON das.audit_guid = sa.audit_guid;
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+USE [TERA];
+GO
+
+ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_DB_Changes]
+WITH (STATE = OFF);
+GO
+++++++++++++++++++++++++++++++++++++++++++++++
+USE [TERA];
+GO
+
+DECLARE @Targets TABLE (SchemaName SYSNAME, TableName SYSNAME);
+INSERT INTO @Targets VALUES
+(N'B_hipaatizer', N'sub_23e30401_a88f_4482_96c3_cdf57dbad4f2'),
+(N'B_hipaatizer', N'sub_3f1acb99_0a2f_4649_ba5d_540b70186d94'),
+(N'B_hipaatizer', N'sub_759e68f8_20e0_4c68_a832_10a56dcc0220'),
+(N'B_hipaatizer', N'sub_76bc1d94_e875_47c6_aada_682f331a48ae'),
+(N'B_hipaatizer', N'sub_7c5cbbfa_2281_433a_9b30_96aa55340f1b'),
+(N'B_hipaatizer', N'sub_8bef00e4_7ac4_4459_8940_e688a26a48dc'),
+(N'B_hipaatizer', N'sub_8ffdd7a5_68db_4d2d_8da0_2b254d8826fb'),
+(N'B_hipaatizer', N'sub_93fb2298_af42_4847_b4c1_04fb8551dc5d'),
+(N'B_hipaatizer', N'sub_bbba0231_9080_4e96_812b_8a3dc806a992'),
+(N'B_hipaatizer', N'sub_f372d42e_c35d_4826_9124_ff67421c48e9'),
+(N'S_cdpdynamics', N'CDP_APPOINTMENTS'),
+(N'S_cdpdynamics', N'CDP_ENCOUNTERS'),
+(N'B_epic',        N'Patient'),
+(N'S_cdpdynamics', N'CDP_PAT_DEMOGRAPHICS');
+
+DECLARE @sql NVARCHAR(MAX) = N'';
+
+SELECT @sql += N'
+IF OBJECT_ID(N''' + QUOTENAME(t.SchemaName) + '.' + QUOTENAME(t.TableName) + N''') IS NOT NULL
+AND NOT EXISTS (
+    SELECT 1
+    FROM sys.database_audit_specification_details d
+    JOIN sys.database_audit_specifications s
+      ON d.database_specification_id = s.database_specification_id
+    WHERE s.name = N''AUDSPEC_TERA_DB_Changes''
+      AND d.audit_action_id = N''SL''
+      AND d.major_id = OBJECT_ID(N''' + QUOTENAME(t.SchemaName) + '.' + QUOTENAME(t.TableName) + N''')
+)
+BEGIN
+    ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_DB_Changes]
+        ADD (SELECT ON OBJECT::' + QUOTENAME(t.SchemaName) + '.' + QUOTENAME(t.TableName) + N' BY [public]);
+END;'
+FROM (SELECT DISTINCT * FROM @Targets) t;
+
+EXEC sys.sp_executesql @sql;
+GO
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_DB_Changes]
+WITH (STATE = ON);
+GO
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+USE [TERA];
+GO
+
+SELECT
+    s.name AS audit_spec_name,
+    d.audit_action_id,
+    OBJECT_SCHEMA_NAME(d.major_id) AS schema_name,
+    OBJECT_NAME(d.major_id) AS object_name
+FROM sys.database_audit_specification_details d
+JOIN sys.database_audit_specifications s
+  ON d.database_specification_id = s.database_specification_id
+WHERE s.name = 'AUDSPEC_TERA_DB_Changes'
+  AND d.audit_action_id = 'SL'
+ORDER BY schema_name, object_name;
+
+
+
