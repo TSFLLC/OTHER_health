@@ -323,6 +323,159 @@ SELECT name FROM msdb.dbo.sysmail_profile;
 
 
 
+++++++    Query the views+++++++++++++++++++++++++++++
+🟢 MANUAL REPORT #1
+Failed Logins (last 24 hours / custom window)
+Last 24 hours
+
+SELECT
+    event_time,
+    server_principal_name AS login_name,
+    client_ip,
+    application_name,
+    statement
+FROM dbo.v_Audit_FailedLogins
+WHERE event_time >= DATEADD(DAY, -1, SYSUTCDATETIME())
+ORDER BY event_time DESC;
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+--Custom date range
+DECLARE @StartDate DATETIME2 = '2026-01-07 00:00:00';
+DECLARE @EndDate   DATETIME2 = '2026-01-08 00:00:00';
+
+SELECT
+    event_time,
+    server_principal_name,
+    client_ip,
+    application_name,
+    statement
+FROM dbo.v_Audit_FailedLogins
+WHERE event_time BETWEEN @StartDate AND @EndDate
+ORDER BY event_time DESC;
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+🔴 MANUAL REPORT #2
+Table / Object DROPs
+SELECT
+    event_time,
+    server_principal_name,
+    database_name,
+    schema_name,
+    object_name,
+    statement
+FROM dbo.v_Audit_TableDrops
+WHERE event_time >= DATEADD(DAY, -7, SYSUTCDATETIME())  -- last 7 days
+ORDER BY event_time DESC;
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+🔴 MANUAL REPORT #3
+PHI SELECT Access (core HIPAA report)
+All PHI access (last 24 hours)
+
+SELECT
+    event_time,
+    server_principal_name,
+    database_principal_name,
+    schema_name,
+    object_name,
+    application_name,
+    client_ip,
+    statement
+FROM dbo.v_Audit_PHI_Selects
+WHERE event_time >= DATEADD(DAY, -1, SYSUTCDATETIME())
+ORDER BY event_time DESC;
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+--PHI access by a specific user
+SELECT *
+FROM dbo.v_Audit_PHI_Selects
+WHERE server_principal_name = 'DOMAIN\username'
+ORDER BY event_time DESC;
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+--PHI access to a specific table
+SELECT *
+FROM dbo.v_Audit_PHI_Selects
+WHERE schema_name = 'S_cdpdynamics'
+  AND object_name = 'CDP_PAT_DEMOGRAPHICS'
+ORDER BY event_time DESC;
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Human users only (exclude service accounts)
+SELECT *
+FROM dbo.v_Audit_PHI_Selects
+WHERE server_principal_name NOT LIKE 'svc%'
+  AND server_principal_name NOT LIKE 'sql%'
+ORDER BY event_time DESC;
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+🔵 MANUAL REPORT #4
+General Daily Audit Summary (Counts)
+
+SELECT
+    CAST(event_time AS DATE) AS audit_date,
+    action_id,
+    COUNT(*) AS event_count
+FROM dbo.v_Audit_All
+WHERE event_time >= DATEADD(DAY, -1, SYSUTCDATETIME())
+GROUP BY CAST(event_time AS DATE), action_id
+ORDER BY event_count DESC;
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+🔵 MANUAL REPORT #5
+Privilege & Role Changes (important but low volume)
+
+SELECT
+    event_time,
+    action_id,
+    server_principal_name,
+    statement
+FROM dbo.v_Audit_All
+WHERE action_id IN
+(
+    'APRL', -- add role member
+    'RPRL', -- remove role member
+    'G',    -- grant
+    'D',    -- deny
+    'R',    -- revoke
+    'CR',   -- create
+    'AL',   -- alter
+    'DR'    -- drop
+)
+ORDER BY event_time DESC;
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+---📊 MANAGEMENT-FRIENDLY QUICK METRICS
+SELECT
+    server_principal_name,
+    COUNT(*) AS phi_select_count,
+    MIN(event_time) AS first_access,
+    MAX(event_time) AS last_access
+FROM dbo.v_Audit_PHI_Selects
+GROUP BY server_principal_name
+ORDER BY phi_select_count DESC;
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+--PHI access by application
+SELECT
+    application_name,
+    COUNT(*) AS access_count
+FROM dbo.v_Audit_PHI_Selects
+GROUP BY application_name
+ORDER BY access_count DESC;
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
