@@ -1,140 +1,98 @@
-DECLARE @ServerAudit     SYSNAME = N'AUD_Prod_TERAtoFile';            -- existing Server Audit name
-DECLARE @DesiredSpecName SYSNAME = N'AUDSPEC_TERA_Select_Targeted';   -- desired DB Audit Spec name
-DECLARE @DropExisting    BIT     = 0;  -- 0=reuse existing; 1=drop & recreate with @DesiredSpecName
 
-/* ============================
-   Targets (schemas & tables)
-   ============================ */
+============1) Create spec if missing + turn it OFF for changes==========================================
+
+USE [TERA];
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.database_audit_specifications WHERE name = N'AUDSPEC_TERA_Select_Targeted')
+BEGIN
+    CREATE DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted]
+    FOR SERVER AUDIT [AUD_Prod_TERAtoFile];
+END
+GO
+
+ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted] WITH (STATE = OFF);
+GO
+
+================2) BEFORE adding, check which targets exist (this will reveal the “missing” ones)===========================
+
 DECLARE @Targets TABLE (SchemaName SYSNAME, TableName SYSNAME);
-INSERT INTO @Targets (SchemaName, TableName)
-VALUES
-    (N'B_hipaatizer', N'sub_23e30401_a88f_4482_96c3_cdf57dbad4f2'),
-    (N'B_hipaatizer', N'sub_3f1acb99_0a2f_4649_ba5d_540b70186d94'),
-    (N'B_hipaatizer', N'sub_759e68f8_20e0_4c68_a832_10a56dcc0220'),
-    (N'B_hipaatizer', N'sub_76bc1d94_e875_47c6_aada_682f331a48ae'),
-    (N'B_hipaatizer', N'sub_7c5cbbfa_2281_433a_9b30_96aa55340f1b'),
-    (N'B_hipaatizer', N'sub_8bef00e4_7ac4_4459_8940_e688a26a48dc'),
-    (N'B_hipaatizer', N'sub_8ffdd7a5_68db_4d2d_8da0_2b254d8826fb'),
-    (N'B_hipaatizer', N'sub_93fb2298_af42_4847_b4c1_04fb8551dc5d'),
-    (N'B_hipaatizer', N'sub_bbba0231_9080_4e96_812b_8a3dc806a992'),
-    (N'B_hipaatizer', N'sub_f372d42e_c35d_4826_9124_ff67421c48e9'),
-    (N'S_cdpdynamics', N'CDP_APPOINTMENTS'),
-    (N'S_cdpdynamics', N'CDP_ENCOUNTERS'),
-    (N'B_epic',        N'Patient'),
-    (N'S_cdpdynamics', N'CDP_PAT_DEMOGRAPHICS');
+INSERT INTO @Targets VALUES
+(N'B_hipaatizer', N'sub_23e30401_a88f_4482_96c3_cdf57dbad4f2'),
+(N'B_hipaatizer', N'sub_3f1acb99_0a2f_4649_ba5d_540b70186d94'),
+(N'B_hipaatizer', N'sub_759e68f8_20e0_4c68_a832_10a56dcc0220'),
+(N'B_hipaatizer', N'sub_76bc1d94_e875_47c6_aada_682f331a48ae'),
+(N'B_hipaatizer', N'sub_7c5cbbfa_2281_433a_9b30_96aa55340f1b'),
+(N'B_hipaatizer', N'sub_8bef00e4_7ac4_4459_8940_e688a26a48dc'),
+(N'B_hipaatizer', N'sub_8ffdd7a5_68db_4d2d_8da0_2b254d8826fb'),
+(N'B_hipaatizer', N'sub_93fb2298_af42_4847_b4c1_04fb8551dc5d'),
+(N'B_hipaatizer', N'sub_bbba0231_9080_4e96_812b_8a3dc806a992'),
+(N'B_hipaatizer', N'sub_f372d42e_c35d_4826_9124_ff67421c48e9'),
+(N'S_cdpdynamics', N'CDP_APPOINTMENTS'),
+(N'S_cdpdynamics', N'CDP_ENCOUNTERS'),
+(N'B_epic',        N'Patient'),
+(N'S_cdpdynamics', N'CDP_PAT_DEMOGRAPHICS');
 
-/* ============================
-   Sanity: ensure Server Audit exists
-   ============================ */
-IF NOT EXISTS (SELECT 1 FROM sys.server_audits WHERE name = @ServerAudit)
-BEGIN
-    RAISERROR('Server Audit %s not found. Create it first or change @ServerAudit.', 16, 1, @ServerAudit);
-    RETURN;
-END
+SELECT
+  t.SchemaName,
+  t.TableName,
+  OBJECT_ID(QUOTENAME(t.SchemaName) + '.' + QUOTENAME(t.TableName)) AS object_id,
+  o.type_desc
+FROM @Targets t
+LEFT JOIN sys.objects o
+  ON o.object_id = OBJECT_ID(QUOTENAME(t.SchemaName) + '.' + QUOTENAME(t.TableName))
+ORDER BY t.SchemaName, t.TableName;
 
-/* ============================
-   Locate existing DB Audit spec (if any)
-   ============================ */
-DECLARE @ExistingSpec SYSNAME = NULL;
 
-SELECT TOP (1) @ExistingSpec = das.name
-FROM sys.database_audit_specifications AS das;
+============3) Add SELECT auditing to the correct spec (add-if-missing)==============================
 
-IF @ExistingSpec IS NULL
-BEGIN
-    PRINT CONCAT('No database audit specification found. Creating ', @DesiredSpecName, ' targeting ', @ServerAudit, '...');
-    EXEC(N'CREATE DATABASE AUDIT SPECIFICATION [' + @DesiredSpecName + N']
-          FOR SERVER AUDIT [' + @ServerAudit + N'];');
-    SET @ExistingSpec = @DesiredSpecName;
-END
-ELSE
-BEGIN
-    IF @DropExisting = 1
-    BEGIN
-        PRINT CONCAT('Dropping existing DB audit spec: ', @ExistingSpec, ' and recreating as ', @DesiredSpecName, '...');
-        EXEC(N'ALTER DATABASE AUDIT SPECIFICATION [' + @ExistingSpec + N'] WITH (STATE = OFF);');
-        EXEC(N'DROP DATABASE AUDIT SPECIFICATION [' + @ExistingSpec + N'];');
-
-        EXEC(N'CREATE DATABASE AUDIT SPECIFICATION [' + @DesiredSpecName + N']
-              FOR SERVER AUDIT [' + @ServerAudit + N'];');
-        SET @ExistingSpec = @DesiredSpecName;
-    END
-    ELSE
-    BEGIN
-        -- Reuse existing spec; verify it targets the intended Server Audit.
-        IF NOT EXISTS (
-            SELECT 1
-            FROM sys.database_audit_specifications AS das
-            JOIN sys.server_audits AS sa
-              ON sa.audit_guid = das.audit_guid
-            WHERE das.name = @ExistingSpec
-              AND sa.name = @ServerAudit
-        )
-        BEGIN
-            RAISERROR('Existing DB audit spec "%s" targets a different Server Audit. Set @DropExisting = 1 to replace it.', 16, 1, @ExistingSpec);
-            RETURN;
-        END
-        PRINT CONCAT('Reusing existing DB audit spec: ', @ExistingSpec, ' targeting Server Audit ', @ServerAudit, '.');
-    END
-END
-
-/* ============================
-   Disable before ALTER/ADD
-   ============================ */
-EXEC(N'ALTER DATABASE AUDIT SPECIFICATION [' + @ExistingSpec + N'] WITH (STATE = OFF);');
-
-/* ============================
-   Build add statements for SELECT on OBJECT::schema.table BY [public]
-   - De-duplicate targets
-   - Skip if object missing
-   - Skip if already present (audit_action_name = ''SL'' and class_desc)
-   ============================ */
 DECLARE @sql NVARCHAR(MAX) = N'';
 
 ;WITH DistinctTargets AS (
     SELECT DISTINCT SchemaName, TableName
     FROM @Targets
 )
-SELECT @sql = @sql +
-N'IF EXISTS (
-       SELECT 1
-       FROM sys.objects
-       WHERE object_id = OBJECT_ID(N''' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N''')
-         AND type IN (''U'',''V'') -- user tables or views
-   )
+SELECT @sql += N'
+IF OBJECT_ID(N''' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N''') IS NOT NULL
+AND NOT EXISTS
+(
+    SELECT 1
+    FROM sys.database_audit_specification_details d
+    JOIN sys.database_audit_specifications s
+      ON d.database_specification_id = s.database_specification_id
+    WHERE s.name = N''AUDSPEC_TERA_Select_Targeted''
+      AND d.audit_action_id = N''SL''
+      AND d.major_id = OBJECT_ID(N''' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N''')
+      AND d.audited_principal_id = DATABASE_PRINCIPAL_ID(N''public'')
+)
 BEGIN
-    -- Add only if not already present
-    IF NOT EXISTS (
-        SELECT 1
-        FROM sys.database_audit_specification_details AS d
-        JOIN sys.database_audit_specifications AS s
-          ON d.database_specification_id = s.database_specification_id
-        WHERE s.name = N''' + @ExistingSpec + N'''
-          AND d.audit_action_name = N''SL''
-          AND d.class_desc IN (N''OBJECT'', N''OBJECT_OR_COLUMN'')
-          AND d.major_id = OBJECT_ID(N''' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N''')
-    )
-    BEGIN
-        PRINT N''Adding SELECT audit on ' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N'...'';
-        ALTER DATABASE AUDIT SPECIFICATION [' + @ExistingSpec + N']
-            ADD (SELECT ON OBJECT::' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N' BY [public]);
-    END
-END
-'
-FROM DistinctTargets AS t;
+  ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted]
+    ADD (SELECT ON OBJECT::' + QUOTENAME(t.SchemaName) + N'.' + QUOTENAME(t.TableName) + N' BY [public]);
+END;'
+FROM DistinctTargets t;
 
 EXEC sys.sp_executesql @sql;
+GO
 
-/* ============================
-   Re-enable DB audit spec
-   ============================ */
-EXEC(N'ALTER DATABASE AUDIT SPECIFICATION [' + @ExistingSpec + N'] WITH (STATE = ON);');
+ALTER DATABASE AUDIT SPECIFICATION [AUDSPEC_TERA_Select_Targeted] WITH (STATE = ON);
+GO
 
---/* ============================
---   Ensure Server Audit is ON (optional)
---   ============================ */
-IF EXISTS (SELECT 1 FROM sys.server_audits WHERE name = @ServerAudit AND is_state_enabled = 0)
-BEGIN
-    PRINT CONCAT('Server Audit ', @ServerAudit, ' is OFF. Enabling...');
-    EXEC(N'ALTER SERVER AUDIT [' + @ServerAudit + N'] WITH (STATE = ON);');
-END
+============Correct verification query (shows what tables are configured under THAT spec)====================
+USE [TERA];
+GO
+
+SELECT
+  s.name AS audit_spec_name,
+  d.audit_action_id,
+  OBJECT_SCHEMA_NAME(d.major_id) AS schema_name,
+  OBJECT_NAME(d.major_id) AS object_name,
+  USER_NAME(d.audited_principal_id) AS audited_principal
+FROM sys.database_audit_specification_details d
+JOIN sys.database_audit_specifications s
+  ON d.database_specification_id = s.database_specification_id
+WHERE s.name = 'AUDSPEC_TERA_Select_Targeted'
+  AND d.audit_action_id = 'SL'
+ORDER BY schema_name, object_name;
+
+
+
