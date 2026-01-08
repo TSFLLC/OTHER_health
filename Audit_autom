@@ -1,0 +1,334 @@
+
+
+
+++++++++A) Confirm Database Mail is configured+++++++++++++++
+
+SELECT name FROM msdb.dbo.sysmail_profile;
+
++++++++B) Confirm SQL Agent is running=====================
+SELECT servicename, status_desc, service_account
+FROM sys.dm_server_services
+WHERE servicename LIKE '%SQL Server Agent%';
+
+++++++++++++Part 1 — Create Views (TERA)++++++++++++++++++++++++++++++++
+
+CREATE OR ALTER VIEW dbo.v_Audit_All
+AS
+SELECT
+    event_time,
+    action_id,
+    succeeded,
+    server_principal_name,
+    database_principal_name,
+    database_name,
+    schema_name,
+    object_name,
+    statement,
+    application_name,
+    client_ip,
+    session_id,
+    server_instance_name
+FROM master.sys.fn_get_audit_file('R:\SQLAudit\TERA\AUD_Prod_TERAToFile*', DEFAULT, DEFAULT);
+GO
+
++++++++++++++1.2 View: Failed logins (Report #1)+++++++++++++++++++++++++++++
+
+CREATE OR ALTER VIEW dbo.v_Audit_FailedLogins
+AS
+SELECT *
+FROM dbo.v_Audit_All
+WHERE action_id = 'LGIF';  -- failed login
+GO
+
+++++++++++++1.3 View: Table DROP events (Report #1)++++++++++++++++++++++
+CREATE OR ALTER VIEW dbo.v_Audit_TableDrops
+AS
+SELECT *
+FROM dbo.v_Audit_All
+WHERE action_id IN ('DR','DL')   -- drop (covers common drop actions)
+  AND database_name = 'TERA';
+GO
+
+++++++++++++1.4 View: PHI SELECT access (Report #2)++++++++++++
+
+CREATE OR ALTER VIEW dbo.v_Audit_PHI_Selects
+AS
+SELECT *
+FROM dbo.v_Audit_All
+WHERE database_name = 'TERA'
+  AND action_id = 'SL'
+  AND (
+        schema_name = 'B_hipaatizer'
+        OR (schema_name = 'S_cdpdynamics'
+            AND object_name IN ('CDP_APPOINTMENTS','CDP_ENCOUNTERS','CDP_PAT_DEMOGRAPHICS'))
+        OR (schema_name = 'B_epic' AND object_name = 'Patient')
+      );
+GO
+
+++++++++++++Now you can validate quickly:+++++++++++++++++++++++++++
+SELECT TOP 100 * FROM dbo.v_Audit_PHI_Selects ORDER BY event_time DESC;
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/*Part 2 — Daily Email Reports (SQL Agent + Database Mail)
+We’ll create 2 email procedures (exactly what you asked for) and a 3rd general summary procedure that I recommend.
+2.1 Helper: HTML table builder pattern
+We’ll generate HTML with FOR XML PATH (simple and reliable).*/
+=============2.2 Procedure: Report #1 (Failed logins + Table drops)+++++++++++++++++++++
+USE [TERA];
+GO
+
+CREATE OR ALTER PROCEDURE dbo.usp_Email_AuditReport_Security
+    @ProfileName SYSNAME,
+    @Recipients  NVARCHAR(MAX),
+    @HoursBack   INT = 24
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @StartTime DATETIME2(7) = DATEADD(HOUR, -@HoursBack, SYSUTCDATETIME());
+    DECLARE @EndTime   DATETIME2(7) = SYSUTCDATETIME();
+
+    DECLARE @html NVARCHAR(MAX) = N'<h2>Daily Security Audit Report</h2>'
+        + N'<p>Window (UTC): ' + CONVERT(NVARCHAR(30), @StartTime, 126) + N' to ' + CONVERT(NVARCHAR(30), @EndTime, 126) + N'</p>';
+
+    /* Failed logins */
+    DECLARE @FailedLoginsHtml NVARCHAR(MAX);
+
+    SELECT @FailedLoginsHtml =
+        (SELECT
+            td = CONVERT(NVARCHAR(30), event_time, 126), '',
+            td = server_principal_name, '',
+            td = client_ip, '',
+            td = application_name, '',
+            td = ISNULL(statement,N'')
+         FROM dbo.v_Audit_FailedLogins
+         WHERE event_time >= @StartTime AND event_time < @EndTime
+         ORDER BY event_time DESC
+         FOR XML PATH('tr'), TYPE
+        ).value('.','nvarchar(max)');
+
+    SET @html += N'<h3>Failed Logins</h3>'
+        + CASE WHEN @FailedLoginsHtml IS NULL OR LEN(@FailedLoginsHtml)=0
+               THEN N'<p><b>No failed logins in this window.</b></p>'
+               ELSE N'<table border="1" cellspacing="0" cellpadding="4">'
+                  + N'<tr><th>event_time</th><th>login</th><th>client_ip</th><th>app</th><th>statement</th></tr>'
+                  + @FailedLoginsHtml + N'</table>'
+          END;
+
+    /* Table drops */
+    DECLARE @DropsHtml NVARCHAR(MAX);
+
+    SELECT @DropsHtml =
+        (SELECT
+            td = CONVERT(NVARCHAR(30), event_time, 126), '',
+            td = server_principal_name, '',
+            td = schema_name, '',
+            td = object_name, '',
+            td = ISNULL(statement,N'')
+         FROM dbo.v_Audit_TableDrops
+         WHERE event_time >= @StartTime AND event_time < @EndTime
+         ORDER BY event_time DESC
+         FOR XML PATH('tr'), TYPE
+        ).value('.','nvarchar(max)');
+
+    SET @html += N'<h3>Table / Object Drops</h3>'
+        + CASE WHEN @DropsHtml IS NULL OR LEN(@DropsHtml)=0
+               THEN N'<p><b>No DROP events in this window.</b></p>'
+               ELSE N'<table border="1" cellspacing="0" cellpadding="4">'
+                  + N'<tr><th>event_time</th><th>login</th><th>schema</th><th>object</th><th>statement</th></tr>'
+                  + @DropsHtml + N'</table>'
+          END;
+
+    EXEC msdb.dbo.sp_send_dbmail
+        @profile_name = @ProfileName,
+        @recipients    = @Recipients,
+        @subject       = 'Daily SQL Audit - Security (Failed Logins + Drops)',
+        @body          = @html,
+        @body_format   = 'HTML';
+END
+GO
+
+++++++++++++++++2.3 Procedure: Report #2 (PHI SELECT access)++++++++++++++++++++++++
+USE [TERA];
+GO
+
+CREATE OR ALTER PROCEDURE dbo.usp_Email_AuditReport_PHI_Selects
+    @ProfileName SYSNAME,
+    @Recipients  NVARCHAR(MAX),
+    @HoursBack   INT = 24
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @StartTime DATETIME2(7) = DATEADD(HOUR, -@HoursBack, SYSUTCDATETIME());
+    DECLARE @EndTime   DATETIME2(7) = SYSUTCDATETIME();
+
+    DECLARE @html NVARCHAR(MAX) = N'<h2>Daily PHI Access Report (SELECT)</h2>'
+        + N'<p>Window (UTC): ' + CONVERT(NVARCHAR(30), @StartTime, 126) + N' to ' + CONVERT(NVARCHAR(30), @EndTime, 126) + N'</p>';
+
+    DECLARE @PhiHtml NVARCHAR(MAX);
+
+    SELECT @PhiHtml =
+        (SELECT
+            td = CONVERT(NVARCHAR(30), event_time, 126), '',
+            td = server_principal_name, '',
+            td = database_principal_name, '',
+            td = schema_name, '',
+            td = object_name, '',
+            td = client_ip, '',
+            td = application_name, '',
+            td = LEFT(ISNULL(statement,N''), 4000)
+         FROM dbo.v_Audit_PHI_Selects
+         WHERE event_time >= @StartTime AND event_time < @EndTime
+         ORDER BY event_time DESC
+         FOR XML PATH('tr'), TYPE
+        ).value('.','nvarchar(max)');
+
+    SET @html += CASE WHEN @PhiHtml IS NULL OR LEN(@PhiHtml)=0
+               THEN N'<p><b>No PHI SELECT activity in this window.</b></p>'
+               ELSE N'<table border="1" cellspacing="0" cellpadding="4">'
+                  + N'<tr><th>event_time</th><th>login</th><th>db_user</th><th>schema</th><th>object</th><th>client_ip</th><th>app</th><th>statement (truncated)</th></tr>'
+                  + @PhiHtml + N'</table>'
+          END;
+
+    EXEC msdb.dbo.sp_send_dbmail
+        @profile_name = @ProfileName,
+        @recipients    = @Recipients,
+        @subject       = 'Daily SQL Audit - PHI SELECT Access',
+        @body          = @html,
+        @body_format   = 'HTML';
+END
+GO
+
+
+++++++++++++++++2.4 (Recommended) Procedure: Report #3 (General summary)++++++++++++++++++++++++++++++++++
+USE [TERA];
+GO
+
+CREATE OR ALTER PROCEDURE dbo.usp_Email_AuditReport_Summary
+    @ProfileName SYSNAME,
+    @Recipients  NVARCHAR(MAX),
+    @HoursBack   INT = 24
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @StartTime DATETIME2(7) = DATEADD(HOUR, -@HoursBack, SYSUTCDATETIME());
+    DECLARE @EndTime   DATETIME2(7) = SYSUTCDATETIME();
+
+    DECLARE @html NVARCHAR(MAX) = N'<h2>Daily SQL Audit Summary</h2>'
+        + N'<p>Window (UTC): ' + CONVERT(NVARCHAR(30), @StartTime, 126) + N' to ' + CONVERT(NVARCHAR(30), @EndTime, 126) + N'</p>';
+
+    DECLARE @SummaryHtml NVARCHAR(MAX);
+
+    SELECT @SummaryHtml =
+        (SELECT
+            td = action_id, '',
+            td = COUNT(*)
+         FROM dbo.v_Audit_All
+         WHERE event_time >= @StartTime AND event_time < @EndTime
+         GROUP BY action_id
+         ORDER BY COUNT(*) DESC
+         FOR XML PATH('tr'), TYPE
+        ).value('.','nvarchar(max)');
+
+    SET @html += N'<h3>Event Counts by Action</h3>'
+        + N'<table border="1" cellspacing="0" cellpadding="4">'
+        + N'<tr><th>action_id</th><th>count</th></tr>'
+        + ISNULL(@SummaryHtml, N'')
+        + N'</table>';
+
+    EXEC msdb.dbo.sp_send_dbmail
+        @profile_name = @ProfileName,
+        @recipients    = @Recipients,
+        @subject       = 'Daily SQL Audit - General Summary',
+        @body          = @html,
+        @body_format   = 'HTML';
+END
+GO
+
+
+--+++++++++++++++++++++Part 3 — Schedule the Daily Emails (SQL Agent)+++++++++++++++++++++
+Replace:
+@ProfileName = 'DBA-Mail'
+@Recipients = 'yourlist@company.com'
+--+++++++++++++++++++++Part 3 — Schedule the Daily Emails (SQL Agent)+++++++++++++++++++++
+
+USE msdb;
+GO
+
+EXEC dbo.sp_add_job
+    @job_name = N'Daily_SQL_Audit_Reports';
+GO
+
+-- Step 1: Security report
+EXEC dbo.sp_add_jobstep
+    @job_name = N'Daily_SQL_Audit_Reports',
+    @step_name = N'Email Security Report',
+    @subsystem = N'TSQL',
+    @database_name = N'TERA',
+    @command = N'EXEC dbo.usp_Email_AuditReport_Security
+                    @ProfileName = N''DBA-Mail'',
+                    @Recipients  = N''security@company.com;dba@company.com'',
+                    @HoursBack   = 24;';
+GO
+
+-- Step 2: PHI report
+EXEC dbo.sp_add_jobstep
+    @job_name = N'Daily_SQL_Audit_Reports',
+    @step_name = N'Email PHI SELECT Report',
+    @subsystem = N'TSQL',
+    @database_name = N'TERA',
+    @command = N'EXEC dbo.usp_Email_AuditReport_PHI_Selects
+                    @ProfileName = N''DBA-Mail'',
+                    @Recipients  = N''security@company.com;dba@company.com'',
+                    @HoursBack   = 24;';
+GO
+
+-- Step 3: Summary (recommended)
+EXEC dbo.sp_add_jobstep
+    @job_name = N'Daily_SQL_Audit_Reports',
+    @step_name = N'Email General Summary',
+    @subsystem = N'TSQL',
+    @database_name = N'TERA',
+    @command = N'EXEC dbo.usp_Email_AuditReport_Summary
+                    @ProfileName = N''DBA-Mail'',
+                    @Recipients  = N''security@company.com;dba@company.com'',
+                    @HoursBack   = 24;';
+GO
+
+-- Schedule: daily at 06:00 (server local time)
+EXEC dbo.sp_add_schedule
+    @schedule_name = N'Daily_0600',
+    @freq_type = 4,          -- daily
+    @freq_interval = 1,
+    @active_start_time = 060000;
+GO
+
+EXEC dbo.sp_attach_schedule
+    @job_name = N'Daily_SQL_Audit_Reports',
+    @schedule_name = N'Daily_0600';
+GO
+
+EXEC dbo.sp_add_jobserver
+    @job_name = N'Daily_SQL_Audit_Reports';
+GO
+--++++++++++++++++++
+EXEC msdb.dbo.sp_start_job N'Daily_SQL_Audit_Reports';
+             --  ++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+SELECT name FROM msdb.dbo.sysmail_profile;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
