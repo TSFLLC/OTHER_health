@@ -124,8 +124,9 @@ GO
 /* =========================
    3) Email Procedures
    ========================= */
+USE [TERA];
+GO
 
--- 3.1 Security report: Human failed logins + drops
 CREATE OR ALTER PROCEDURE dbo.usp_Email_AuditReport_Security_HumansOnly
     @ProfileName SYSNAME,
     @Recipients  NVARCHAR(MAX),
@@ -137,64 +138,119 @@ BEGIN
     DECLARE @StartTime DATETIME2(7) = DATEADD(HOUR, -@HoursBack, SYSUTCDATETIME());
     DECLARE @EndTime   DATETIME2(7) = SYSUTCDATETIME();
 
+    DECLARE @style NVARCHAR(MAX) = N'
+<style>
+  body{font-family:Segoe UI, Arial; font-size:10pt;}
+  table{border-collapse:collapse; width:100%; table-layout:fixed;}
+  th,td{border:1px solid #cfcfcf; padding:6px; vertical-align:top; word-break:break-word; white-space:normal;}
+  th{background:#f3f3f3;}
+  .col-time{width:150px;}
+  .col-type{width:105px;}
+  .col-login{width:190px;}
+  .col-schema{width:130px;}
+  .col-object{width:180px;}
+  .col-ip{width:120px;}
+  .col-app{width:220px;}
+  .col-stmt{width:auto;}
+</style>';
+
     DECLARE @html NVARCHAR(MAX) =
-N'<style>
-table{border-collapse:collapse;font-family:Segoe UI,Arial;font-size:10pt}
-th,td{border:1px solid #ccc;padding:6px;vertical-align:top}
-td{white-space:normal;word-break:break-word;max-width:700px}
-</style>'
-+ N'<h2>Daily Security Audit Report (Human Only)</h2>'
-+ N'<p>Window (UTC): ' + CONVERT(NVARCHAR(30), @StartTime, 126) + N' to ' + CONVERT(NVARCHAR(30), @EndTime, 126) + N'</p>';
+        @style
+      + N'<h2>Daily Security Audit Report (Human Only)</h2>'
+      + N'<p>Window (UTC): ' + CONVERT(NVARCHAR(30), @StartTime, 126)
+      + N' to ' + CONVERT(NVARCHAR(30), @EndTime, 126) + N'</p>';
 
-    /* Failed logins (human-only; already cleaned in the view) */
-    DECLARE @FailedHtml NVARCHAR(MAX);
+    /* =======================
+       A) Failed Logins (Human Only, Clean)
+       ======================= */
+    DECLARE @FailedRows NVARCHAR(MAX) = N'';
 
-    SELECT @FailedHtml =
+    SELECT @FailedRows =
     (
       SELECT
-        td = CONVERT(NVARCHAR(19), event_time, 120), '',
-        td = server_principal_name, '',
-        td = ISNULL(client_ip,N''), '',
-        td = ISNULL(application_name,N''), '',
-        td = LEFT(REPLACE(REPLACE(ISNULL(statement,N''), CHAR(13),' '), CHAR(10),' '), 300)
-      FROM dbo.v_Audit_FailedLogins
-      WHERE event_time >= @StartTime AND event_time < @EndTime
-        AND server_principal_name NOT LIKE 'svc%'
-        AND server_principal_name NOT LIKE 'NT SERVICE\%'
-        AND server_principal_name NOT IN (SELECT login_name FROM dbo.Audit_ExcludeLogins)
-      ORDER BY event_time DESC
-      FOR XML PATH('tr'), TYPE
+        N'<tr>'
+        + N'<td class="col-time">' + CONVERT(NVARCHAR(19), a.event_time, 120) + N'</td>'
+        + N'<td class="col-type">LOGIN FAILED</td>'
+        + N'<td class="col-login">' + ISNULL(a.server_principal_name,N'') + N'</td>'
+        + N'<td class="col-schema">' + ISNULL(a.schema_name,N'') + N'</td>'
+        + N'<td class="col-object">' + ISNULL(a.object_name,N'') + N'</td>'
+        + N'<td class="col-ip">' + ISNULL(a.client_ip,N'') + N'</td>'
+        + N'<td class="col-app">' + ISNULL(a.application_name,N'') + N'</td>'
+        + N'<td class="col-stmt">' + ISNULL(REPLACE(REPLACE(LEFT(a.statement, 400), CHAR(13), ' '), CHAR(10), ' '), N'') + N'</td>'
+        + N'</tr>'
+      FROM dbo.v_Audit_All a
+      WHERE a.event_time >= @StartTime AND a.event_time < @EndTime
+        AND a.action_id = 'LGIF'
+        AND NULLIF(LTRIM(RTRIM(a.server_principal_name)), '') IS NOT NULL
+        AND ISNULL(a.statement,'') NOT LIKE '%Network error code 0x2746%'
+        AND a.server_principal_name NOT LIKE 'svc%'
+        AND a.server_principal_name NOT LIKE 'NT SERVICE\%'
+        AND a.server_principal_name NOT IN (SELECT login_name FROM dbo.Audit_ExcludeLogins)
+      ORDER BY a.event_time DESC
+      FOR XML PATH(''), TYPE
     ).value('.','nvarchar(max)');
 
     SET @html += N'<h3>Failed Logins (Human Only)</h3>'
-      + CASE WHEN @FailedHtml IS NULL OR LEN(@FailedHtml)=0
-        THEN N'<p><b>No human failed logins in this window.</b></p>'
-        ELSE N'<table><tr><th>event_time</th><th>login</th><th>client_ip</th><th>app</th><th>message (short)</th></tr>'
-             + @FailedHtml + N'</table>'
+      + CASE WHEN @FailedRows IS NULL OR LEN(@FailedRows)=0
+             THEN N'<p><b>No human failed logins in this window.</b></p>'
+             ELSE N'<table>'
+                + N'<tr>'
+                + N'<th class="col-time">event_time</th>'
+                + N'<th class="col-type">event_type</th>'
+                + N'<th class="col-login">login_name</th>'
+                + N'<th class="col-schema">schema_name</th>'
+                + N'<th class="col-object">object_name</th>'
+                + N'<th class="col-ip">client_ip</th>'
+                + N'<th class="col-app">application_name</th>'
+                + N'<th class="col-stmt">statement</th>'
+                + N'</tr>'
+                + @FailedRows
+                + N'</table>'
         END;
 
-    /* Drops (keep all) */
-    DECLARE @DropHtml NVARCHAR(MAX);
+    /* =======================
+       B) Drops (All OR Human Only — your choice)
+       Currently: All drops
+       ======================= */
+    DECLARE @DropRows NVARCHAR(MAX) = N'';
 
-    SELECT @DropHtml =
+    SELECT @DropRows =
     (
       SELECT
-        td = CONVERT(NVARCHAR(19), event_time, 120), '',
-        td = server_principal_name, '',
-        td = ISNULL(schema_name,N''), '',
-        td = ISNULL(object_name,N''), '',
-        td = LEFT(REPLACE(REPLACE(ISNULL(statement,N''), CHAR(13),' '), CHAR(10),' '), 400)
-      FROM dbo.v_Audit_TableDrops
-      WHERE event_time >= @StartTime AND event_time < @EndTime
-      ORDER BY event_time DESC
-      FOR XML PATH('tr'), TYPE
+        N'<tr>'
+        + N'<td class="col-time">' + CONVERT(NVARCHAR(19), a.event_time, 120) + N'</td>'
+        + N'<td class="col-type">DROP</td>'
+        + N'<td class="col-login">' + ISNULL(a.server_principal_name,N'') + N'</td>'
+        + N'<td class="col-schema">' + ISNULL(a.schema_name,N'') + N'</td>'
+        + N'<td class="col-object">' + ISNULL(a.object_name,N'') + N'</td>'
+        + N'<td class="col-ip">' + ISNULL(a.client_ip,N'') + N'</td>'
+        + N'<td class="col-app">' + ISNULL(a.application_name,N'') + N'</td>'
+        + N'<td class="col-stmt">' + ISNULL(REPLACE(REPLACE(LEFT(a.statement, 400), CHAR(13), ' '), CHAR(10), ' '), N'') + N'</td>'
+        + N'</tr>'
+      FROM dbo.v_Audit_All a
+      WHERE a.event_time >= @StartTime AND a.event_time < @EndTime
+        AND a.database_name = 'TERA'
+        AND a.action_id IN ('DR','DL')
+      ORDER BY a.event_time DESC
+      FOR XML PATH(''), TYPE
     ).value('.','nvarchar(max)');
 
     SET @html += N'<h3>Table / Object Drops (All)</h3>'
-      + CASE WHEN @DropHtml IS NULL OR LEN(@DropHtml)=0
-        THEN N'<p><b>No DROP events in this window.</b></p>'
-        ELSE N'<table><tr><th>event_time</th><th>login</th><th>schema</th><th>object</th><th>statement (short)</th></tr>'
-             + @DropHtml + N'</table>'
+      + CASE WHEN @DropRows IS NULL OR LEN(@DropRows)=0
+             THEN N'<p><b>No DROP events in this window.</b></p>'
+             ELSE N'<table>'
+                + N'<tr>'
+                + N'<th class="col-time">event_time</th>'
+                + N'<th class="col-type">event_type</th>'
+                + N'<th class="col-login">login_name</th>'
+                + N'<th class="col-schema">schema_name</th>'
+                + N'<th class="col-object">object_name</th>'
+                + N'<th class="col-ip">client_ip</th>'
+                + N'<th class="col-app">application_name</th>'
+                + N'<th class="col-stmt">statement</th>'
+                + N'</tr>'
+                + @DropRows
+                + N'</table>'
         END;
 
     EXEC msdb.dbo.sp_send_dbmail
@@ -207,7 +263,10 @@ END
 GO
 
 
--- 3.2 PHI SELECT report (human-only)
+++++++++++++++++++++++++++Email_AuditReport_PHI_Selects_HumansOnly+++++++++++++++++++++++++++++
+USE [TERA];
+GO
+
 CREATE OR ALTER PROCEDURE dbo.usp_Email_AuditReport_PHI_Selects_HumansOnly
     @ProfileName SYSNAME,
     @Recipients  NVARCHAR(MAX),
@@ -219,39 +278,67 @@ BEGIN
     DECLARE @StartTime DATETIME2(7) = DATEADD(HOUR, -@HoursBack, SYSUTCDATETIME());
     DECLARE @EndTime   DATETIME2(7) = SYSUTCDATETIME();
 
+    DECLARE @style NVARCHAR(MAX) = N'
+<style>
+  body{font-family:Segoe UI, Arial; font-size:10pt;}
+  table{border-collapse:collapse; width:100%; table-layout:fixed;}
+  th,td{border:1px solid #cfcfcf; padding:6px; vertical-align:top; word-break:break-word; white-space:normal;}
+  th{background:#f3f3f3;}
+  .col-time{width:150px;}
+  .col-type{width:90px;}
+  .col-login{width:190px;}
+  .col-schema{width:130px;}
+  .col-object{width:220px;}
+  .col-ip{width:120px;}
+  .col-app{width:220px;}
+  .col-stmt{width:auto;}
+</style>';
+
     DECLARE @html NVARCHAR(MAX) =
-N'<style>
-table{border-collapse:collapse;font-family:Segoe UI,Arial;font-size:10pt}
-th,td{border:1px solid #ccc;padding:6px;vertical-align:top}
-td{white-space:normal;word-break:break-word;max-width:700px}
-</style>'
-+ N'<h2>Daily PHI Access Report (Human Only - SELECT)</h2>'
-+ N'<p>Window (UTC): ' + CONVERT(NVARCHAR(30), @StartTime, 126) + N' to ' + CONVERT(NVARCHAR(30), @EndTime, 126) + N'</p>';
+        @style
+      + N'<h2>Daily PHI Access Report (Human Only - SELECT)</h2>'
+      + N'<p>Window (UTC): ' + CONVERT(NVARCHAR(30), @StartTime, 126)
+      + N' to ' + CONVERT(NVARCHAR(30), @EndTime, 126) + N'</p>';
 
-    DECLARE @PhiHtml NVARCHAR(MAX);
+    DECLARE @Rows NVARCHAR(MAX) = N'';
 
-    SELECT @PhiHtml =
+    SELECT @Rows =
     (
       SELECT
-        td = CONVERT(NVARCHAR(19), event_time, 120), '',
-        td = server_principal_name, '',
-        td = schema_name + N'.' + object_name, '',
-        td = ISNULL(client_ip,N''), '',
-        td = ISNULL(application_name,N''), '',
-        td = LEFT(REPLACE(REPLACE(ISNULL(statement,N''), CHAR(13),' '), CHAR(10),' '), 400)
-      FROM dbo.v_Audit_PHI_Selects
-      WHERE event_time >= @StartTime AND event_time < @EndTime
-        AND server_principal_name NOT LIKE 'svc%'
-        AND server_principal_name NOT LIKE 'NT SERVICE\%'
-        AND server_principal_name NOT IN (SELECT login_name FROM dbo.Audit_ExcludeLogins)
-      ORDER BY event_time DESC
-      FOR XML PATH('tr'), TYPE
+        N'<tr>'
+        + N'<td class="col-time">' + CONVERT(NVARCHAR(19), a.event_time, 120) + N'</td>'
+        + N'<td class="col-type">SELECT</td>'
+        + N'<td class="col-login">' + ISNULL(a.server_principal_name,N'') + N'</td>'
+        + N'<td class="col-schema">' + ISNULL(a.schema_name,N'') + N'</td>'
+        + N'<td class="col-object">' + ISNULL(a.object_name,N'') + N'</td>'
+        + N'<td class="col-ip">' + ISNULL(a.client_ip,N'') + N'</td>'
+        + N'<td class="col-app">' + ISNULL(a.application_name,N'') + N'</td>'
+        + N'<td class="col-stmt">' + ISNULL(REPLACE(REPLACE(LEFT(a.statement, 400), CHAR(13), ' '), CHAR(10), ' '), N'') + N'</td>'
+        + N'</tr>'
+      FROM dbo.v_Audit_PHI_Selects a
+      WHERE a.event_time >= @StartTime AND a.event_time < @EndTime
+        AND a.server_principal_name NOT LIKE 'svc%'
+        AND a.server_principal_name NOT LIKE 'NT SERVICE\%'
+        AND a.server_principal_name NOT IN (SELECT login_name FROM dbo.Audit_ExcludeLogins)
+      ORDER BY a.event_time DESC
+      FOR XML PATH(''), TYPE
     ).value('.','nvarchar(max)');
 
-    SET @html += CASE WHEN @PhiHtml IS NULL OR LEN(@PhiHtml)=0
+    SET @html += CASE WHEN @Rows IS NULL OR LEN(@Rows)=0
       THEN N'<p><b>No human PHI SELECT activity in this window.</b></p>'
-      ELSE N'<table><tr><th>event_time</th><th>login</th><th>object</th><th>client_ip</th><th>app</th><th>statement (short)</th></tr>'
-           + @PhiHtml + N'</table>'
+      ELSE N'<table>'
+         + N'<tr>'
+         + N'<th class="col-time">event_time</th>'
+         + N'<th class="col-type">event_type</th>'
+         + N'<th class="col-login">login_name</th>'
+         + N'<th class="col-schema">schema_name</th>'
+         + N'<th class="col-object">object_name</th>'
+         + N'<th class="col-ip">client_ip</th>'
+         + N'<th class="col-app">application_name</th>'
+         + N'<th class="col-stmt">statement</th>'
+         + N'</tr>'
+         + @Rows
+         + N'</table>'
       END;
 
     EXEC msdb.dbo.sp_send_dbmail
@@ -264,52 +351,25 @@ END
 GO
 
 
--- 3.3 Optional: Top tables by size email
-CREATE OR ALTER PROCEDURE dbo.usp_Email_TopTablesBySize
-    @ProfileName SYSNAME,
-    @Recipients  NVARCHAR(MAX),
-    @TopN        INT = 10
-AS
-BEGIN
-    SET NOCOUNT ON;
-
-    DECLARE @html NVARCHAR(MAX) =
-N'<style>
-table{border-collapse:collapse;font-family:Segoe UI,Arial;font-size:10pt}
-th,td{border:1px solid #ccc;padding:6px;vertical-align:top}
-</style>'
-+ N'<h2>Top Tables by Size</h2>';
-
-    DECLARE @TblHtml NVARCHAR(MAX);
-
-    SELECT @TblHtml =
-    (
-      SELECT
-        td = SchemaName, '',
-        td = TableName, '',
-        td = CONVERT(VARCHAR(30), RowCounts), '',
-        td = CONVERT(VARCHAR(30), TotalSpaceMB)
-      FROM (SELECT TOP (@TopN) * FROM dbo.v_Tables_SizeAndRows ORDER BY TotalSpaceMB DESC) x
-      FOR XML PATH('tr'), TYPE
-    ).value('.','nvarchar(max)');
-
-    SET @html += N'<table><tr><th>SchemaName</th><th>TableName</th><th>RowCounts</th><th>TotalSpaceMB</th></tr>'
-              + ISNULL(@TblHtml,N'') + N'</table>';
-
-    EXEC msdb.dbo.sp_send_dbmail
-      @profile_name = @ProfileName,
-      @recipients   = @Recipients,
-      @subject      = 'Daily SQL Report - Top Tables by Size',
-      @body         = @html,
-      @body_format  = 'HTML';
-END
-GO
-
 
 /* =========================
    4) Quick manual test calls
    (EDIT profile/recipients)
    ========================= */
+
+EXEC dbo.usp_Email_AuditReport_Security_HumansOnly
+  @ProfileName = N'DBA-Mail',
+  @Recipients  = N'security@company.com;dba@company.com',
+  @HoursBack   = 24;
+
+EXEC dbo.usp_Email_AuditReport_PHI_Selects_HumansOnly
+  @ProfileName = N'DBA-Mail',
+  @Recipients  = N'security@company.com;dba@company.com',
+  @HoursBack   = 24;
+
+
+
+
 
 -- Uncomment to test immediately
 --EXEC dbo.usp_Email_AuditReport_Security_HumansOnly
