@@ -1,0 +1,412 @@
+/* ===========================================================
+   TERA - End-to-End Daily Audit Reporting Setup (Human Only)
+   - Filters svc% and exclude-list logins
+   - Removes blank login + network error noise from failed logins
+   - Creates views + email procs + SQL Agent job
+   =========================================================== */
+
+USE [TERA];
+GO
+
+/* =========================
+   1) Exclude list table
+   ========================= */
+IF OBJECT_ID('dbo.Audit_ExcludeLogins','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.Audit_ExcludeLogins
+  (
+    login_name SYSNAME NOT NULL PRIMARY KEY,
+    reason     NVARCHAR(200) NULL,
+    created_at DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+END
+GO
+
+-- Add common built-in service accounts (safe defaults)
+INSERT INTO dbo.Audit_ExcludeLogins(login_name, reason)
+SELECT v.login_name, v.reason
+FROM (VALUES
+ (N'NT SERVICE\SQLSERVERAGENT', N'SQL Agent service'),
+ (N'NT SERVICE\MSSQLSERVER',    N'SQL Server service')
+) v(login_name, reason)
+WHERE NOT EXISTS (SELECT 1 FROM dbo.Audit_ExcludeLogins e WHERE e.login_name = v.login_name);
+GO
+
+
+/* =========================
+   2) Views (Excel-friendly)
+   ========================= */
+
+-- 2.1 All audit records (from file)
+CREATE OR ALTER VIEW dbo.v_Audit_All
+AS
+SELECT
+    event_time,
+    action_id,
+    succeeded,
+    server_principal_name,
+    database_principal_name,
+    database_name,
+    schema_name,
+    object_name,
+    statement,
+    application_name,
+    client_ip,
+    session_id,
+    server_instance_name,
+    class_type_desc
+FROM master.sys.fn_get_audit_file('R:\SQLAudit\TERA\AUD_Prod_TERAToFile*', DEFAULT, DEFAULT);
+GO
+
+-- 2.2 Failed logins (CLEAN)
+--     * Removes rows with blank login
+--     * Removes known network handshake errors (0x2746)
+CREATE OR ALTER VIEW dbo.v_Audit_FailedLogins
+AS
+SELECT *
+FROM dbo.v_Audit_All
+WHERE action_id = 'LGIF'
+  AND NULLIF(LTRIM(RTRIM(server_principal_name)), '') IS NOT NULL
+  AND ISNULL(statement,'') NOT LIKE '%Network error code 0x2746%';
+GO
+
+-- 2.3 Table/Object Drops
+CREATE OR ALTER VIEW dbo.v_Audit_TableDrops
+AS
+SELECT *
+FROM dbo.v_Audit_All
+WHERE action_id IN ('DR','DL')
+  AND database_name = 'TERA';
+GO
+
+-- 2.4 PHI SELECTs (edit list if needed)
+CREATE OR ALTER VIEW dbo.v_Audit_PHI_Selects
+AS
+SELECT *
+FROM dbo.v_Audit_All
+WHERE database_name = 'TERA'
+  AND action_id = 'SL'
+  AND (
+        schema_name = 'B_hipaatizer'
+        OR (schema_name = 'S_cdpdynamics'
+            AND object_name IN ('CDP_APPOINTMENTS','CDP_ENCOUNTERS','CDP_PAT_DEMOGRAPHICS'))
+        OR (schema_name = 'B_epic' AND object_name = 'Patient')
+      );
+GO
+
+-- 2.5 Tables size/rows report (like your screenshot)
+CREATE OR ALTER VIEW dbo.v_Tables_SizeAndRows
+AS
+WITH s AS
+(
+  SELECT
+      SchemaName = SCHEMA_NAME(t.schema_id),
+      TableName  = t.name,
+      RowCounts  = SUM(ps.row_count),
+      TotalSpaceMB = CAST(SUM(au.total_pages) * 8.0 / 1024 AS DECIMAL(18,2))
+  FROM sys.tables t
+  JOIN sys.indexes i ON t.object_id = i.object_id
+  JOIN sys.dm_db_partition_stats ps ON i.object_id = ps.object_id AND i.index_id = ps.index_id
+  JOIN sys.partitions p ON p.object_id = ps.object_id AND p.index_id = ps.index_id AND p.partition_id = ps.partition_id
+  JOIN sys.allocation_units au ON au.container_id = p.hobt_id
+  WHERE i.index_id IN (0,1)  -- avoid double counting
+  GROUP BY t.schema_id, t.name
+)
+SELECT TOP (1000)
+    SchemaName,
+    TableName,
+    RowCounts,
+    TotalSpaceMB
+FROM s;
+GO
+
+
+/* =========================
+   3) Email Procedures
+   ========================= */
+
+-- 3.1 Security report: Human failed logins + drops
+CREATE OR ALTER PROCEDURE dbo.usp_Email_AuditReport_Security_HumansOnly
+    @ProfileName SYSNAME,
+    @Recipients  NVARCHAR(MAX),
+    @HoursBack   INT = 24
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @StartTime DATETIME2(7) = DATEADD(HOUR, -@HoursBack, SYSUTCDATETIME());
+    DECLARE @EndTime   DATETIME2(7) = SYSUTCDATETIME();
+
+    DECLARE @html NVARCHAR(MAX) =
+N'<style>
+table{border-collapse:collapse;font-family:Segoe UI,Arial;font-size:10pt}
+th,td{border:1px solid #ccc;padding:6px;vertical-align:top}
+td{white-space:normal;word-break:break-word;max-width:700px}
+</style>'
++ N'<h2>Daily Security Audit Report (Human Only)</h2>'
++ N'<p>Window (UTC): ' + CONVERT(NVARCHAR(30), @StartTime, 126) + N' to ' + CONVERT(NVARCHAR(30), @EndTime, 126) + N'</p>';
+
+    /* Failed logins (human-only; already cleaned in the view) */
+    DECLARE @FailedHtml NVARCHAR(MAX);
+
+    SELECT @FailedHtml =
+    (
+      SELECT
+        td = CONVERT(NVARCHAR(19), event_time, 120), '',
+        td = server_principal_name, '',
+        td = ISNULL(client_ip,N''), '',
+        td = ISNULL(application_name,N''), '',
+        td = LEFT(REPLACE(REPLACE(ISNULL(statement,N''), CHAR(13),' '), CHAR(10),' '), 300)
+      FROM dbo.v_Audit_FailedLogins
+      WHERE event_time >= @StartTime AND event_time < @EndTime
+        AND server_principal_name NOT LIKE 'svc%'
+        AND server_principal_name NOT LIKE 'NT SERVICE\%'
+        AND server_principal_name NOT IN (SELECT login_name FROM dbo.Audit_ExcludeLogins)
+      ORDER BY event_time DESC
+      FOR XML PATH('tr'), TYPE
+    ).value('.','nvarchar(max)');
+
+    SET @html += N'<h3>Failed Logins (Human Only)</h3>'
+      + CASE WHEN @FailedHtml IS NULL OR LEN(@FailedHtml)=0
+        THEN N'<p><b>No human failed logins in this window.</b></p>'
+        ELSE N'<table><tr><th>event_time</th><th>login</th><th>client_ip</th><th>app</th><th>message (short)</th></tr>'
+             + @FailedHtml + N'</table>'
+        END;
+
+    /* Drops (keep all) */
+    DECLARE @DropHtml NVARCHAR(MAX);
+
+    SELECT @DropHtml =
+    (
+      SELECT
+        td = CONVERT(NVARCHAR(19), event_time, 120), '',
+        td = server_principal_name, '',
+        td = ISNULL(schema_name,N''), '',
+        td = ISNULL(object_name,N''), '',
+        td = LEFT(REPLACE(REPLACE(ISNULL(statement,N''), CHAR(13),' '), CHAR(10),' '), 400)
+      FROM dbo.v_Audit_TableDrops
+      WHERE event_time >= @StartTime AND event_time < @EndTime
+      ORDER BY event_time DESC
+      FOR XML PATH('tr'), TYPE
+    ).value('.','nvarchar(max)');
+
+    SET @html += N'<h3>Table / Object Drops (All)</h3>'
+      + CASE WHEN @DropHtml IS NULL OR LEN(@DropHtml)=0
+        THEN N'<p><b>No DROP events in this window.</b></p>'
+        ELSE N'<table><tr><th>event_time</th><th>login</th><th>schema</th><th>object</th><th>statement (short)</th></tr>'
+             + @DropHtml + N'</table>'
+        END;
+
+    EXEC msdb.dbo.sp_send_dbmail
+      @profile_name = @ProfileName,
+      @recipients   = @Recipients,
+      @subject      = 'Daily SQL Audit - Security (Human Failed Logins + Drops)',
+      @body         = @html,
+      @body_format  = 'HTML';
+END
+GO
+
+
+-- 3.2 PHI SELECT report (human-only)
+CREATE OR ALTER PROCEDURE dbo.usp_Email_AuditReport_PHI_Selects_HumansOnly
+    @ProfileName SYSNAME,
+    @Recipients  NVARCHAR(MAX),
+    @HoursBack   INT = 24
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @StartTime DATETIME2(7) = DATEADD(HOUR, -@HoursBack, SYSUTCDATETIME());
+    DECLARE @EndTime   DATETIME2(7) = SYSUTCDATETIME();
+
+    DECLARE @html NVARCHAR(MAX) =
+N'<style>
+table{border-collapse:collapse;font-family:Segoe UI,Arial;font-size:10pt}
+th,td{border:1px solid #ccc;padding:6px;vertical-align:top}
+td{white-space:normal;word-break:break-word;max-width:700px}
+</style>'
++ N'<h2>Daily PHI Access Report (Human Only - SELECT)</h2>'
++ N'<p>Window (UTC): ' + CONVERT(NVARCHAR(30), @StartTime, 126) + N' to ' + CONVERT(NVARCHAR(30), @EndTime, 126) + N'</p>';
+
+    DECLARE @PhiHtml NVARCHAR(MAX);
+
+    SELECT @PhiHtml =
+    (
+      SELECT
+        td = CONVERT(NVARCHAR(19), event_time, 120), '',
+        td = server_principal_name, '',
+        td = schema_name + N'.' + object_name, '',
+        td = ISNULL(client_ip,N''), '',
+        td = ISNULL(application_name,N''), '',
+        td = LEFT(REPLACE(REPLACE(ISNULL(statement,N''), CHAR(13),' '), CHAR(10),' '), 400)
+      FROM dbo.v_Audit_PHI_Selects
+      WHERE event_time >= @StartTime AND event_time < @EndTime
+        AND server_principal_name NOT LIKE 'svc%'
+        AND server_principal_name NOT LIKE 'NT SERVICE\%'
+        AND server_principal_name NOT IN (SELECT login_name FROM dbo.Audit_ExcludeLogins)
+      ORDER BY event_time DESC
+      FOR XML PATH('tr'), TYPE
+    ).value('.','nvarchar(max)');
+
+    SET @html += CASE WHEN @PhiHtml IS NULL OR LEN(@PhiHtml)=0
+      THEN N'<p><b>No human PHI SELECT activity in this window.</b></p>'
+      ELSE N'<table><tr><th>event_time</th><th>login</th><th>object</th><th>client_ip</th><th>app</th><th>statement (short)</th></tr>'
+           + @PhiHtml + N'</table>'
+      END;
+
+    EXEC msdb.dbo.sp_send_dbmail
+      @profile_name = @ProfileName,
+      @recipients   = @Recipients,
+      @subject      = 'Daily SQL Audit - PHI SELECT Access (Human Only)',
+      @body         = @html,
+      @body_format  = 'HTML';
+END
+GO
+
+
+-- 3.3 Optional: Top tables by size email
+CREATE OR ALTER PROCEDURE dbo.usp_Email_TopTablesBySize
+    @ProfileName SYSNAME,
+    @Recipients  NVARCHAR(MAX),
+    @TopN        INT = 10
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @html NVARCHAR(MAX) =
+N'<style>
+table{border-collapse:collapse;font-family:Segoe UI,Arial;font-size:10pt}
+th,td{border:1px solid #ccc;padding:6px;vertical-align:top}
+</style>'
++ N'<h2>Top Tables by Size</h2>';
+
+    DECLARE @TblHtml NVARCHAR(MAX);
+
+    SELECT @TblHtml =
+    (
+      SELECT
+        td = SchemaName, '',
+        td = TableName, '',
+        td = CONVERT(VARCHAR(30), RowCounts), '',
+        td = CONVERT(VARCHAR(30), TotalSpaceMB)
+      FROM (SELECT TOP (@TopN) * FROM dbo.v_Tables_SizeAndRows ORDER BY TotalSpaceMB DESC) x
+      FOR XML PATH('tr'), TYPE
+    ).value('.','nvarchar(max)');
+
+    SET @html += N'<table><tr><th>SchemaName</th><th>TableName</th><th>RowCounts</th><th>TotalSpaceMB</th></tr>'
+              + ISNULL(@TblHtml,N'') + N'</table>';
+
+    EXEC msdb.dbo.sp_send_dbmail
+      @profile_name = @ProfileName,
+      @recipients   = @Recipients,
+      @subject      = 'Daily SQL Report - Top Tables by Size',
+      @body         = @html,
+      @body_format  = 'HTML';
+END
+GO
+
+
+/* =========================
+   4) Quick manual test calls
+   (EDIT profile/recipients)
+   ========================= */
+
+-- Uncomment to test immediately
+--EXEC dbo.usp_Email_AuditReport_Security_HumansOnly
+--    @ProfileName = N'DBA-Mail',
+--    @Recipients  = N'security@company.com;dba@company.com',
+--    @HoursBack   = 24;
+
+--EXEC dbo.usp_Email_AuditReport_PHI_Selects_HumansOnly
+--    @ProfileName = N'DBA-Mail',
+--    @Recipients  = N'security@company.com;dba@company.com',
+--    @HoursBack   = 24;
+
+--EXEC dbo.usp_Email_TopTablesBySize
+--    @ProfileName = N'DBA-Mail',
+--    @Recipients  = N'security@company.com;dba@company.com',
+--    @TopN        = 10;
+GO
+
+
+/* =========================
+   5) SQL Agent Job (Daily)
+   - Recreate job cleanly
+   (EDIT profile/recipients)
+   ========================= */
+USE msdb;
+GO
+
+IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N'Daily_TERA_Audit_Reports')
+BEGIN
+  EXEC msdb.dbo.sp_delete_job @job_name = N'Daily_TERA_Audit_Reports';
+END
+GO
+
+EXEC dbo.sp_add_job
+  @job_name = N'Daily_TERA_Audit_Reports';
+GO
+
+EXEC dbo.sp_add_jobstep
+  @job_name = N'Daily_TERA_Audit_Reports',
+  @step_name = N'Email Security (Humans Only)',
+  @subsystem = N'TSQL',
+  @database_name = N'TERA',
+  @command = N'EXEC dbo.usp_Email_AuditReport_Security_HumansOnly
+                @ProfileName = N''DBA-Mail'',
+                @Recipients  = N''security@company.com;dba@company.com'',
+                @HoursBack   = 24;';
+GO
+
+EXEC dbo.sp_add_jobstep
+  @job_name = N'Daily_TERA_Audit_Reports',
+  @step_name = N'Email PHI SELECT (Humans Only)',
+  @subsystem = N'TSQL',
+  @database_name = N'TERA',
+  @command = N'EXEC dbo.usp_Email_AuditReport_PHI_Selects_HumansOnly
+                @ProfileName = N''DBA-Mail'',
+                @Recipients  = N''security@company.com;dba@company.com'',
+                @HoursBack   = 24;';
+GO
+
+EXEC dbo.sp_add_jobstep
+  @job_name = N'Daily_TERA_Audit_Reports',
+  @step_name = N'Email Top Tables by Size',
+  @subsystem = N'TSQL',
+  @database_name = N'TERA',
+  @command = N'EXEC dbo.usp_Email_TopTablesBySize
+                @ProfileName = N''DBA-Mail'',
+                @Recipients  = N''security@company.com;dba@company.com'',
+                @TopN        = 10;';
+GO
+
+EXEC dbo.sp_add_schedule
+  @schedule_name = N'Daily_0600',
+  @freq_type = 4,          -- daily
+  @freq_interval = 1,
+  @active_start_time = 060000;
+GO
+
+EXEC dbo.sp_attach_schedule
+  @job_name = N'Daily_TERA_Audit_Reports',
+  @schedule_name = N'Daily_0600';
+GO
+
+EXEC dbo.sp_add_jobserver
+  @job_name = N'Daily_TERA_Audit_Reports';
+GO
+
+
+++++++++++++++++++++++++++++++++After you run it
+
+Add any other service accounts you see (besides svc%) into the exclude list:+++++++++++++++++++++++
+
+USE [TERA];
+INSERT INTO dbo.Audit_ExcludeLogins(login_name, reason)
+VALUES (N'DOMAIN\SomeAppAccount', N'Application account');
+
+****************Run the job manually once:*****************************************************************************
+EXEC msdb.dbo.sp_start_job N'Daily_TERA_Audit_Reports';
+
+
+
