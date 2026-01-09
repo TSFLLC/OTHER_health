@@ -228,6 +228,9 @@ GO
 USE TERA;
 GO
 
+USE TERA;
+GO
+
 IF OBJECT_ID('S_cdpdynamics.trg_CDP_APPOINTMENTS_Masking', 'TR') IS NOT NULL
     DROP TRIGGER S_cdpdynamics.trg_CDP_APPOINTMENTS_Masking;
 GO
@@ -238,8 +241,6 @@ AFTER INSERT, UPDATE
 AS
 BEGIN
     SET NOCOUNT ON;
-
-    -- Prevent recursion
     IF TRIGGER_NESTLEVEL() > 1 RETURN;
 
     ;WITH ToMask AS
@@ -283,25 +284,23 @@ BEGIN
         Referralcreatedondate   = M.MaskedReferralCreatedOn,
 
         PrimaryCarePhysicianNPI      = M.MaskedPCPNPI,
-        PatientPrimaryCarePhysician  = M.MaskedPCPName,
+        PatientPrimaryCarePhysician  = M.MaskedPCPValue,
 
         ReferringPhysicianID    = M.MaskedRefPhysID,
-        ReferringPhysician      = M.MaskedRefPhysName,
+        ReferringPhysician      = M.MaskedRefPhysValue,
         ReferringPhysicianNPI   = M.MaskedRefPhysNPI,
 
         OrderingPhysicianNPI    = M.MaskedOrdPhysNPI,
-        OrderingPhysician       = M.MaskedOrdPhysName,
+        OrderingPhysician       = M.MaskedOrdPhysValue,
 
         UserName                = M.MaskedUserName,
-
         EpicAppointmentsCreatedOn = M.MaskedEpicCreatedOn,
         LastUpdated               = M.MaskedLastUpdated
-
     FROM ToMask A
     CROSS APPLY (SELECT ABS(CHECKSUM(A.AppointmentID)) AS Seed) AS S
     CROSS APPLY
     (
-        -- Same masking logic as static update (kept consistent/deterministic)
+        -- identical masking logic as static update (keeps deterministic behavior)
         SELECT
             CASE S.Seed % 10
                 WHEN 0 THEN 'James' WHEN 1 THEN 'Mary' WHEN 2 THEN 'Robert' WHEN 3 THEN 'Patricia' WHEN 4 THEN 'John'
@@ -344,22 +343,14 @@ BEGIN
             END AS MaskedAddress1,
 
             CASE (S.Seed / 5) % 5
-                WHEN 0 THEN 'Houston'
-                WHEN 1 THEN 'Dallas'
-                WHEN 2 THEN 'Austin'
-                WHEN 3 THEN 'San Antonio'
-                ELSE 'Fort Worth'
+                WHEN 0 THEN 'Houston' WHEN 1 THEN 'Dallas' WHEN 2 THEN 'Austin' WHEN 3 THEN 'San Antonio' ELSE 'Fort Worth'
             END AS MaskedCity,
 
             CASE (S.Seed / 25) % 4 WHEN 0 THEN 'TX' WHEN 1 THEN 'OK' WHEN 2 THEN 'LA' ELSE 'NM' END AS MaskedState,
             CAST(10000 + (S.Seed % 90000) AS INT) AS MaskedZip,
 
             CASE (S.Seed / 50) % 5
-                WHEN 0 THEN 'Harris'
-                WHEN 1 THEN 'Dallas'
-                WHEN 2 THEN 'Travis'
-                WHEN 3 THEN 'Bexar'
-                ELSE 'Tarrant'
+                WHEN 0 THEN 'Harris' WHEN 1 THEN 'Dallas' WHEN 2 THEN 'Travis' WHEN 3 THEN 'Bexar' ELSE 'Tarrant'
             END AS MaskedCounty,
 
             CAST(1000 + (S.Seed % 9000) AS INT) AS MaskedVisitReasonCode,
@@ -374,23 +365,14 @@ BEGIN
             DATEADD(DAY, (S.Seed % 365), ISNULL(A.Referralcreatedondate, CAST('2018-01-01' AS DATE))) AS MaskedReferralCreatedOn,
 
             RIGHT('0000000000' + CAST(ABS(CHECKSUM('PCPNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedPCPNPI,
-            'Dr. ' + CASE (S.Seed / 7) % 10
-                WHEN 0 THEN 'Adams' WHEN 1 THEN 'Baker' WHEN 2 THEN 'Clark' WHEN 3 THEN 'Davis' WHEN 4 THEN 'Evans'
-                WHEN 5 THEN 'Frank' WHEN 6 THEN 'Green' WHEN 7 THEN 'Hill' WHEN 8 THEN 'Irwin' ELSE 'Jones'
-            END AS MaskedPCPName,
+            CAST(ABS(CHECKSUM('PCPVAL', S.Seed)) AS BIGINT) AS MaskedPCPValue,
 
             CAST(ABS(CHECKSUM('REFID', S.Seed)) AS BIGINT) AS MaskedRefPhysID,
-            'Dr. ' + CASE (S.Seed / 11) % 10
-                WHEN 0 THEN 'King' WHEN 1 THEN 'Lewis' WHEN 2 THEN 'Moore' WHEN 3 THEN 'Nelson' WHEN 4 THEN 'Owens'
-                WHEN 5 THEN 'Parker' WHEN 6 THEN 'Quinn' WHEN 7 THEN 'Reed' WHEN 8 THEN 'Scott' ELSE 'Turner'
-            END AS MaskedRefPhysName,
+            CAST(ABS(CHECKSUM('REFVAL', S.Seed)) AS BIGINT) AS MaskedRefPhysValue,
             RIGHT('0000000000' + CAST(ABS(CHECKSUM('REFNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedRefPhysNPI,
 
             RIGHT('0000000000' + CAST(ABS(CHECKSUM('ORDNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedOrdPhysNPI,
-            'Dr. ' + CASE (S.Seed / 13) % 10
-                WHEN 0 THEN 'Underwood' WHEN 1 THEN 'Vega' WHEN 2 THEN 'White' WHEN 3 THEN 'Xavier' WHEN 4 THEN 'Young'
-                WHEN 5 THEN 'Zimmer' WHEN 6 THEN 'Carter' WHEN 7 THEN 'Diaz' WHEN 8 THEN 'Edwards' ELSE 'Foster'
-            END AS MaskedOrdPhysName,
+            CAST(ABS(CHECKSUM('ORDVAL', S.Seed)) AS BIGINT) AS MaskedOrdPhysValue,
 
             'user' + RIGHT('000000' + CAST(S.Seed % 1000000 AS VARCHAR(6)), 6) AS MaskedUserName,
 
