@@ -61,11 +61,14 @@
 USE TERA;
 GO
 
+USE TERA;
+GO
+
 /*========================================================
-  STATIC MASKING (APPOINTMENTS)
+  STATIC MASKING (APPOINTMENTS) - TYPE SAFE
   TABLE : TERA.S_cdpdynamics.CDP_APPOINTMENTS
   SEED  : AppointmentID
-  NOTE  : MRN is NOT masked (per request)
+  NOTE  : MRN is NOT masked
 =========================================================*/
 
 UPDATE A
@@ -94,13 +97,13 @@ SET
     PatientHomeAddressZipcode  = M.MaskedZip,
     PatientHomeAddressCounty   = M.MaskedCounty,
 
-    -- Visit/Appointment reason (PHI risk)
+    -- PHI fields
     VisitReasonCode         = M.MaskedVisitReasonCode,
     VisitReasonDescription  = M.MaskedVisitReasonDesc,
     AppointmentDescription  = M.MaskedApptDesc,
     AppointmentComment      = M.MaskedApptComment,
 
-    -- Linkage keys (do NOT touch AppointmentID)
+    -- Linkage keys
     VisitencounterID        = M.MaskedVisitEncounterID,
     VisitEncountersID       = M.MaskedVisitEncountersID,
 
@@ -108,32 +111,27 @@ SET
     [Referral code]         = M.MaskedReferralCode,
     Referralcreatedondate   = M.MaskedReferralCreatedOn,
 
-    -- Providers (names/NPIs/IDs)
+    -- Providers (TYPE SAFE: numeric tokens)
     PrimaryCarePhysicianNPI      = M.MaskedPCPNPI,
-    PatientPrimaryCarePhysician  = M.MaskedPCPName,
+    PatientPrimaryCarePhysician  = M.MaskedPCPValue,
+    ReferringPhysicianID         = M.MaskedRefPhysID,
+    ReferringPhysician           = M.MaskedRefPhysValue,
+    ReferringPhysicianNPI        = M.MaskedRefPhysNPI,
+    OrderingPhysicianNPI         = M.MaskedOrdPhysNPI,
+    OrderingPhysician            = M.MaskedOrdPhysValue,
 
-    ReferringPhysicianID    = M.MaskedRefPhysID,
-    ReferringPhysician      = M.MaskedRefPhysName,
-    ReferringPhysicianNPI   = M.MaskedRefPhysNPI,
-
-    OrderingPhysicianNPI    = M.MaskedOrdPhysNPI,
-    OrderingPhysician       = M.MaskedOrdPhysName,
-
-    -- Workforce/system id
+    -- UserName
     UserName                = M.MaskedUserName,
 
-    -- Timestamps (event-correlation risk)
+    -- Timestamps
     EpicAppointmentsCreatedOn = M.MaskedEpicCreatedOn,
     LastUpdated               = M.MaskedLastUpdated
-
 FROM TERA.S_cdpdynamics.CDP_APPOINTMENTS AS A
 CROSS APPLY (SELECT ABS(CHECKSUM(A.AppointmentID)) AS Seed) AS S
 CROSS APPLY
 (
     SELECT
-        ------------------------------------------------------------
         -- Names
-        ------------------------------------------------------------
         CASE S.Seed % 10
             WHEN 0 THEN 'James' WHEN 1 THEN 'Mary' WHEN 2 THEN 'Robert' WHEN 3 THEN 'Patricia' WHEN 4 THEN 'John'
             WHEN 5 THEN 'Jennifer' WHEN 6 THEN 'Michael' WHEN 7 THEN 'Linda' WHEN 8 THEN 'David' ELSE 'Sarah'
@@ -147,9 +145,7 @@ CROSS APPLY
         CHAR(65 + (S.Seed % 26)) AS MaskedMI,
         CASE (S.Seed / 100) % 4 WHEN 0 THEN 'Jr' WHEN 1 THEN 'Sr' WHEN 2 THEN 'II' ELSE 'III' END AS MaskedSuffix,
 
-        ------------------------------------------------------------
         -- Email
-        ------------------------------------------------------------
         LOWER(
             CASE S.Seed % 10
                 WHEN 0 THEN 'james' WHEN 1 THEN 'mary' WHEN 2 THEN 'robert' WHEN 3 THEN 'patricia' WHEN 4 THEN 'john'
@@ -161,28 +157,17 @@ CROSS APPLY
             END + '@examplemail.com'
         ) AS MaskedEmail,
 
-        ------------------------------------------------------------
         -- Phones (10 digits)
-        ------------------------------------------------------------
         RIGHT('0000000000' + CAST(ABS(CHECKSUM('MOB', S.Seed)) AS VARCHAR(20)), 10) AS MaskedMobilePhone,
         RIGHT('0000000000' + CAST(ABS(CHECKSUM('HOM', S.Seed)) AS VARCHAR(20)), 10) AS MaskedHomePhone,
         RIGHT('0000000000' + CAST(ABS(CHECKSUM('WRK', S.Seed)) AS VARCHAR(20)), 10) AS MaskedWorkPhone,
         RIGHT('0000000000' + CAST(ABS(CHECKSUM('PRF', S.Seed)) AS VARCHAR(20)), 10) AS MaskedPreferredPhone,
 
-        ------------------------------------------------------------
         -- DOB + Gender
-        ------------------------------------------------------------
-        DATEFROMPARTS(
-            1940 + (S.Seed % 60),
-            1 + ((S.Seed / 100) % 12),
-            1 + ((S.Seed / 1000) % 28)
-        ) AS MaskedDOB,
-
+        DATEFROMPARTS(1940 + (S.Seed % 60), 1 + ((S.Seed / 100) % 12), 1 + ((S.Seed / 1000) % 28)) AS MaskedDOB,
         CASE S.Seed % 3 WHEN 0 THEN 'F' WHEN 1 THEN 'M' ELSE 'U' END AS MaskedGender,
 
-        ------------------------------------------------------------
         -- Address
-        ------------------------------------------------------------
         CASE S.Seed % 5
             WHEN 0 THEN '123 Main St'
             WHEN 1 THEN '456 Oak Ave'
@@ -192,90 +177,50 @@ CROSS APPLY
         END AS MaskedAddress1,
 
         CASE (S.Seed / 5) % 5
-            WHEN 0 THEN 'Houston'
-            WHEN 1 THEN 'Dallas'
-            WHEN 2 THEN 'Austin'
-            WHEN 3 THEN 'San Antonio'
-            ELSE 'Fort Worth'
+            WHEN 0 THEN 'Houston' WHEN 1 THEN 'Dallas' WHEN 2 THEN 'Austin' WHEN 3 THEN 'San Antonio' ELSE 'Fort Worth'
         END AS MaskedCity,
 
         CASE (S.Seed / 25) % 4 WHEN 0 THEN 'TX' WHEN 1 THEN 'OK' WHEN 2 THEN 'LA' ELSE 'NM' END AS MaskedState,
         CAST(10000 + (S.Seed % 90000) AS INT) AS MaskedZip,
 
         CASE (S.Seed / 50) % 5
-            WHEN 0 THEN 'Harris'
-            WHEN 1 THEN 'Dallas'
-            WHEN 2 THEN 'Travis'
-            WHEN 3 THEN 'Bexar'
-            ELSE 'Tarrant'
+            WHEN 0 THEN 'Harris' WHEN 1 THEN 'Dallas' WHEN 2 THEN 'Travis' WHEN 3 THEN 'Bexar' ELSE 'Tarrant'
         END AS MaskedCounty,
 
-        ------------------------------------------------------------
         -- PHI fields
-        ------------------------------------------------------------
         CAST(1000 + (S.Seed % 9000) AS INT) AS MaskedVisitReasonCode,
         'General consultation (masked)'     AS MaskedVisitReasonDesc,
         'Routine visit (masked)'            AS MaskedApptDesc,
-
-        -- Comment sometimes numeric in some feeds; numeric-safe token
         CAST(100000 + (S.Seed % 900000) AS INT) AS MaskedApptComment,
 
-        ------------------------------------------------------------
-        -- Linkage keys (tokenize)
-        ------------------------------------------------------------
+        -- Linkage keys
         CAST(ABS(CHECKSUM('VEID',  S.Seed)) AS BIGINT) AS MaskedVisitEncounterID,
         CAST(ABS(CHECKSUM('VECID', S.Seed)) AS BIGINT) AS MaskedVisitEncountersID,
 
-        ------------------------------------------------------------
         -- Referral
-        ------------------------------------------------------------
         CAST(ABS(CHECKSUM('REF', S.Seed)) AS BIGINT) AS MaskedReferralCode,
-        DATEADD(DAY, (S.Seed % 365),
-            ISNULL(A.Referralcreatedondate, CAST('2018-01-01' AS DATE))
-        ) AS MaskedReferralCreatedOn,
+        DATEADD(DAY, (S.Seed % 365), ISNULL(A.Referralcreatedondate, CAST('2018-01-01' AS DATE))) AS MaskedReferralCreatedOn,
 
-        ------------------------------------------------------------
-        -- Providers (names + NPI/IDs)
-        ------------------------------------------------------------
+        -- Providers (TYPE SAFE numeric tokens)
         RIGHT('0000000000' + CAST(ABS(CHECKSUM('PCPNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedPCPNPI,
-        'Dr. ' +
-        CASE (S.Seed / 7) % 10
-            WHEN 0 THEN 'Adams' WHEN 1 THEN 'Baker' WHEN 2 THEN 'Clark' WHEN 3 THEN 'Davis' WHEN 4 THEN 'Evans'
-            WHEN 5 THEN 'Frank' WHEN 6 THEN 'Green' WHEN 7 THEN 'Hill' WHEN 8 THEN 'Irwin' ELSE 'Jones'
-        END AS MaskedPCPName,
+        CAST(ABS(CHECKSUM('PCPVAL', S.Seed)) AS BIGINT) AS MaskedPCPValue,
 
         CAST(ABS(CHECKSUM('REFID', S.Seed)) AS BIGINT) AS MaskedRefPhysID,
-        'Dr. ' +
-        CASE (S.Seed / 11) % 10
-            WHEN 0 THEN 'King' WHEN 1 THEN 'Lewis' WHEN 2 THEN 'Moore' WHEN 3 THEN 'Nelson' WHEN 4 THEN 'Owens'
-            WHEN 5 THEN 'Parker' WHEN 6 THEN 'Quinn' WHEN 7 THEN 'Reed' WHEN 8 THEN 'Scott' ELSE 'Turner'
-        END AS MaskedRefPhysName,
+        CAST(ABS(CHECKSUM('REFVAL', S.Seed)) AS BIGINT) AS MaskedRefPhysValue,
         RIGHT('0000000000' + CAST(ABS(CHECKSUM('REFNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedRefPhysNPI,
 
         RIGHT('0000000000' + CAST(ABS(CHECKSUM('ORDNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedOrdPhysNPI,
-        'Dr. ' +
-        CASE (S.Seed / 13) % 10
-            WHEN 0 THEN 'Underwood' WHEN 1 THEN 'Vega' WHEN 2 THEN 'White' WHEN 3 THEN 'Xavier' WHEN 4 THEN 'Young'
-            WHEN 5 THEN 'Zimmer' WHEN 6 THEN 'Carter' WHEN 7 THEN 'Diaz' WHEN 8 THEN 'Edwards' ELSE 'Foster'
-        END AS MaskedOrdPhysName,
+        CAST(ABS(CHECKSUM('ORDVAL', S.Seed)) AS BIGINT) AS MaskedOrdPhysValue,
 
-        ------------------------------------------------------------
         -- UserName
-        ------------------------------------------------------------
         'user' + RIGHT('000000' + CAST(S.Seed % 1000000 AS VARCHAR(6)), 6) AS MaskedUserName,
 
-        ------------------------------------------------------------
-        -- Created/Updated timestamps (date shift)
-        ------------------------------------------------------------
-        DATEADD(DAY, (S.Seed % 365),
-            ISNULL(CAST(A.EpicAppointmentsCreatedOn AS DATETIME), CAST('2018-01-01' AS DATETIME))
-        ) AS MaskedEpicCreatedOn,
-
-        DATEADD(DAY, (S.Seed % 365),
-            ISNULL(CAST(A.LastUpdated AS DATETIME), CAST('2018-01-01' AS DATETIME))
-        ) AS MaskedLastUpdated
+        -- Timestamps
+        DATEADD(DAY, (S.Seed % 365), ISNULL(CAST(A.EpicAppointmentsCreatedOn AS DATETIME), CAST('2018-01-01' AS DATETIME))) AS MaskedEpicCreatedOn,
+        DATEADD(DAY, (S.Seed % 365), ISNULL(CAST(A.LastUpdated AS DATETIME), CAST('2018-01-01' AS DATETIME))) AS MaskedLastUpdated
 ) AS M;
 GO
+
 
 
 ++++++++++++++++++++++++++++++++++++++++++++++++++trigger++++++++++++++++++++++++++++++++++
