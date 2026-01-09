@@ -228,9 +228,6 @@ GO
 USE TERA;
 GO
 
-USE TERA;
-GO
-
 IF OBJECT_ID('S_cdpdynamics.trg_CDP_APPOINTMENTS_Masking', 'TR') IS NOT NULL
     DROP TRIGGER S_cdpdynamics.trg_CDP_APPOINTMENTS_Masking;
 GO
