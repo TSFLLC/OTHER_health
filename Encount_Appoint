@@ -97,187 +97,403 @@ GO
   SEED  : EncounterId
 =========================================================*/
 
-UPDATE E
+USE TERA;
+GO
+
+/*========================================================
+  STATIC MASKING (UPDATED TABLE)
+  TABLE : TERA.S_cdpdynamics.CDP_PAT_ENCOUNTERS
+  SEED  : EncounterId   (fallback to checksum(MRN) if EncounterId is NULL)
+  NOTE  : MRN is NOT masked (per request)
+=========================================================*/
+
+UPDATE A
 SET
-    -- identifiers
-    MRN                     = M.MaskedMRN,
-    -- EncounterId           = M.MaskedEncounterId,    -- optional (usually keep key)
-    EncounterLine            = M.MaskedEncounterLine,
+    /* -------- PHI / Encounter timeline -------- */
+    EncounterDate        = M.MaskedEncounterDate,
+    AdmissionDateTime    = M.MaskedAdmissionDT,
+    DischargeDateTime    = M.MaskedDischargeDT,
+    LastUpdated          = M.MaskedLastUpdated,
+    EpicEncountersCreatedOn = M.MaskedEpicEncCreatedOn,
 
-    -- dates of care
-    EncounterDate            = M.MaskedEncounterDate,
-    AdmissionDateTime        = M.MaskedAdmissionDateTime,
-    DischargeDateTime        = M.MaskedDischargeDateTime,
-    EpicEncountersCreatedOn  = M.MaskedEpicEncountersCreatedOn,
+    /* -------- Visit reason / clinical text -------- */
+    VisitReason          = M.MaskedVisitReason,
+    ReasonCode           = M.MaskedReasonCode,
 
-    -- clinical / reason
-    ReasonCode               = M.MaskedReasonCode,
-    VisitReason              = M.MaskedVisitReason,
+    /* -------- Clinical codes (PHI) -------- */
+    CPTHCPCS             = M.MaskedCPTHCPCS,
+    CPTModifiers         = M.MaskedCPTModifiers,
+    LOINC                = M.MaskedLOINC,
+    SNOMEDCT             = M.MaskedSNOMED,
+    ICD10                = M.MaskedICD10,
+    DRG                  = M.MaskedDRG,
+    [Vaccine Records]    = M.MaskedVaccineRecords,
 
-    -- SNOMEDCT is NUMERIC in your table (FIXED)
-    SNOMEDCT                 = M.MaskedSNOMEDCT,
+    /* -------- Insurance / payer identifiers (PII/financial) -------- */
+    PrimaryHealthPlanName    = M.MaskedPrimaryPlan,
+    SecondaryHealthPlanName  = M.MaskedSecondaryPlan,
+    Payer                    = M.MaskedPayer,
 
-    DRG                      = M.MaskedDRG,
-    CPT                      = M.MaskedCPT,
-    [CPT Modifiers]          = M.MaskedCPTModifiers,
-    ICD10                    = M.MaskedICD10,
+    PrimaryMemberNumber      = M.MaskedPrimaryMember,
+    PrimaryGroupNumber       = M.MaskedPrimaryGroup,
+    SecondaryMemberNumber    = M.MaskedSecondaryMember,
+    SecondaryGroupNumber     = M.MaskedSecondaryGroup,
 
-    -- insurance / coverage
-    FinancialClass           = M.MaskedFinancialClass,
-    PrimaryHealthPlanName    = M.MaskedPrimaryHealthPlanName,
-    PrimaryMemberNumber      = M.MaskedPrimaryMemberNumber,
-    PrimaryGroupNumber       = M.MaskedPrimaryGroupNumber,
-    SecondaryHealthPlanName  = M.MaskedSecondaryHealthPlanName,
-    SecondaryMemberNumber    = M.MaskedSecondaryMemberNumber,
-    SecondaryGroupNumber     = M.MaskedSecondaryGroupNumber
-FROM TERA.S_cdpdynamics.CDP_ENCOUNTERS AS E
+    /* -------- Provider identifiers (type-safe) -------- */
+    ApptProviderID      = M.MaskedApptProviderID,
+    ApptProvider        = M.MaskedApptProviderValue,
+    ApptProviderNPI     = M.MaskedApptProviderNPI,
+
+    EpicAppointmentsProviderName = M.MaskedEpicApptProvValue,
+
+    AttendingProviderID    = M.MaskedAttendingProvID,
+    AttendingProviderName  = M.MaskedAttendingProvValue,
+    AttendingProviderNPI   = M.MaskedAttendingProvNPI,
+
+    OrderingProviderID     = M.MaskedOrderingProvID,
+    OrderingProviderName   = M.MaskedOrderingProvValue,
+    OrderingProviderNPI    = M.MaskedOrderingProvNPI,
+
+    PrimaryCareProviderID   = M.MaskedPCProvID,
+    PrimaryCareProviderName = M.MaskedPCProvValue,
+    PrimaryCareProviderNPI  = M.MaskedPCProvNPI,
+
+    VisitProviderID         = M.MaskedVisitProvID,
+    VisitProviderName       = M.MaskedVisitProvValue,
+    VisitProviderNPI        = M.MaskedVisitProvNPI,
+
+    AdmissionProviderID     = M.MaskedAdmissionProvID,
+    AdmissionProviderName   = M.MaskedAdmissionProvValue,
+    AdmissionProviderNPI    = M.MaskedAdmissionProvNPI,
+
+    BillAttendingProviderID   = M.MaskedBillAttProvID,
+    BillAttendingProviderName = M.MaskedBillAttProvValue,
+    BillAttendingProviderNPI  = M.MaskedBillAttProvNPI,
+
+    DischargeProviderID     = M.MaskedDischargeProvID,
+    DischargeProviderName   = M.MaskedDischargeProvValue,
+    DischargeProviderNPI    = M.MaskedDischargeProvNPI,
+
+    [Follow-upProviderID]   = M.MaskedFollowupProvID,
+    [Follow-upProviderName] = M.MaskedFollowupProvValue,
+    [Follow-upProviderNPI]  = M.MaskedFollowupProvNPI,
+
+    SurgeonProviderID       = M.MaskedSurgeonProvID,
+    SurgeonProviderName     = M.MaskedSurgeonProvValue,
+    SurgeonProviderNPI      = M.MaskedSurgeonProvNPI,
+
+    /* -------- ACO registry (often patient attribution / sensitive) -------- */
+    ACORegistryID       = M.MaskedACORegID,
+    ACORegistryName     = M.MaskedACORegName,
+
+    /* -------- PCP fields on this table (sensitive) -------- */
+    PrimaryCarePhysicianNPI     = M.MaskedPrimaryCarePhysNPI,
+    PatientPrimaryCarePhysician = M.MaskedPatientPCPValue
+
+    /* NOTE: MRN is NOT updated */
+FROM TERA.S_cdpdynamics.CDP_PAT_ENCOUNTERS AS A
 CROSS APPLY
 (
-    SELECT ABS(CHECKSUM(E.EncounterId)) AS Seed
+    SELECT
+        ABS(CHECKSUM(COALESCE(CONVERT(VARCHAR(100), A.EncounterId), A.MRN))) AS Seed
 ) AS S
 CROSS APPLY
 (
     SELECT
-        ------------------------------------------------------------
-        -- NUMERIC TOKENS (safe for INT or VARCHAR)
-        ------------------------------------------------------------
-        CAST(ABS(CHECKSUM('MRN', S.Seed)) AS BIGINT)            AS MaskedMRN,
-        CAST(ABS(CHECKSUM('EncId', S.Seed)) AS BIGINT)          AS MaskedEncounterId,
-        CAST(ABS(CHECKSUM('EncLine', S.Seed)) AS BIGINT)        AS MaskedEncounterLine,
-
-        -- codes as INT tokens
-        CAST(1000 + (S.Seed % 9000) AS INT)                     AS MaskedReasonCode,
-        CAST(2000 + (S.Seed % 9000) AS INT)                     AS MaskedDRG,
-        CAST(3000 + (S.Seed % 9000) AS INT)                     AS MaskedCPT,
-        CAST(4000 + (S.Seed % 9000) AS INT)                     AS MaskedCPTModifiers,
-        CAST(5000 + (S.Seed % 9000) AS INT)                     AS MaskedICD10,
-
-        -- ✅ SNOMEDCT is INT => must be numeric token (FIX)
-        CAST(600000 + (S.Seed % 399999) AS INT)                 AS MaskedSNOMEDCT,
-
-        CAST(ABS(CHECKSUM('FinClass', S.Seed)) AS INT)          AS MaskedFinancialClass,
-
-        -- member / group numbers
-        CAST(ABS(CHECKSUM('P-Mem', S.Seed)) AS BIGINT)          AS MaskedPrimaryMemberNumber,
-        CAST(ABS(CHECKSUM('P-Grp', S.Seed)) AS BIGINT)          AS MaskedPrimaryGroupNumber,
-        CAST(ABS(CHECKSUM('S-Mem', S.Seed)) AS BIGINT)          AS MaskedSecondaryMemberNumber,
-        CAST(ABS(CHECKSUM('S-Grp', S.Seed)) AS BIGINT)          AS MaskedSecondaryGroupNumber,
-
-        ------------------------------------------------------------
-        -- TEXT VALUES (generic but readable)
-        ------------------------------------------------------------
-        'General consultation (masked)'                         AS MaskedVisitReason,
-        'Health Plan A (masked)'                                AS MaskedPrimaryHealthPlanName,
-        'Health Plan B (masked)'                                AS MaskedSecondaryHealthPlanName,
-
-        ------------------------------------------------------------
-        -- DATES / TIMES (deterministic shift)
-        ------------------------------------------------------------
+        /* ---------- Deterministic date shifts ---------- */
         DATEADD(DAY, (S.Seed % 365),
-            ISNULL(E.EncounterDate, CAST('2018-01-01' AS DATE))
+            ISNULL(CAST(A.EncounterDate AS DATETIME), CAST('2018-01-01' AS DATETIME))
         ) AS MaskedEncounterDate,
 
         DATEADD(DAY, (S.Seed % 365),
-            ISNULL(E.AdmissionDateTime, CAST('2018-01-01' AS DATETIME2))
-        ) AS MaskedAdmissionDateTime,
+            ISNULL(CAST(A.AdmissionDateTime AS DATETIME), CAST('2018-01-01' AS DATETIME))
+        ) AS MaskedAdmissionDT,
 
         DATEADD(DAY, (S.Seed % 365),
-            ISNULL(E.DischargeDateTime, CAST('2018-01-02' AS DATETIME2))
-        ) AS MaskedDischargeDateTime,
+            ISNULL(CAST(A.DischargeDateTime AS DATETIME), CAST('2018-01-02' AS DATETIME))
+        ) AS MaskedDischargeDT,
 
         DATEADD(DAY, (S.Seed % 365),
-            ISNULL(E.EpicEncountersCreatedOn, CAST('2018-01-01' AS DATETIME2))
-        ) AS MaskedEpicEncountersCreatedOn
+            ISNULL(CAST(A.LastUpdated AS DATETIME), CAST('2018-01-01' AS DATETIME))
+        ) AS MaskedLastUpdated,
+
+        DATEADD(DAY, (S.Seed % 365),
+            ISNULL(CAST(A.EpicEncountersCreatedOn AS DATETIME), CAST('2018-01-01' AS DATETIME))
+        ) AS MaskedEpicEncCreatedOn,
+
+        /* ---------- Visit reason / clinical ---------- */
+        CAST(1000 + (S.Seed % 9000) AS INT) AS MaskedReasonCode,
+        'Visit reason (masked)'            AS MaskedVisitReason,
+
+        /* ---------- Codes (keep format realistic-ish) ---------- */
+        '9921' + CAST((S.Seed % 10) AS VARCHAR(1)) AS MaskedCPTHCPCS,
+        CAST(ABS(CHECKSUM('CPTMOD', S.Seed)) AS BIGINT) AS MaskedCPTModifiers,
+
+        -- LOINC typically like 1234-5
+        CAST(1000 + (S.Seed % 9000) AS VARCHAR(4)) + '-' + CAST((S.Seed % 9) + 1 AS VARCHAR(1)) AS MaskedLOINC,
+
+        -- SNOMED numeric
+        CAST(ABS(CHECKSUM('SNOMED', S.Seed)) AS BIGINT) AS MaskedSNOMED,
+
+        -- ICD10 like A12.345
+        CHAR(65 + (S.Seed % 26)) + RIGHT('0' + CAST((S.Seed % 99) AS VARCHAR(2)), 2)
+          + '.' + RIGHT('000' + CAST((S.Seed % 999) AS VARCHAR(3)), 3) AS MaskedICD10,
+
+        -- DRG numeric-ish
+        RIGHT('000' + CAST((S.Seed % 999) AS VARCHAR(3)), 3) AS MaskedDRG,
+
+        'Vaccine records (masked)' AS MaskedVaccineRecords,
+
+        /* ---------- Insurance / payer identifiers ---------- */
+        'Primary Plan (masked)'   AS MaskedPrimaryPlan,
+        'Secondary Plan (masked)' AS MaskedSecondaryPlan,
+        'Payer (masked)'          AS MaskedPayer,
+
+        -- Member / group numbers: numeric tokens (safe for int or varchar)
+        CAST(ABS(CHECKSUM('PMEM', S.Seed)) AS BIGINT) AS MaskedPrimaryMember,
+        CAST(ABS(CHECKSUM('PGRP', S.Seed)) AS BIGINT) AS MaskedPrimaryGroup,
+        CAST(ABS(CHECKSUM('SMEM', S.Seed)) AS BIGINT) AS MaskedSecondaryMember,
+        CAST(ABS(CHECKSUM('SGRP', S.Seed)) AS BIGINT) AS MaskedSecondaryGroup,
+
+        /* ---------- Provider identifiers (type safe numeric tokens) ---------- */
+        CAST(ABS(CHECKSUM('APPTPID', S.Seed)) AS BIGINT) AS MaskedApptProviderID,
+        CAST(ABS(CHECKSUM('APPTP',   S.Seed)) AS BIGINT) AS MaskedApptProviderValue,
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('APPTNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedApptProviderNPI,
+
+        CAST(ABS(CHECKSUM('EAPPTPROV', S.Seed)) AS BIGINT) AS MaskedEpicApptProvValue,
+
+        CAST(ABS(CHECKSUM('ATTID', S.Seed)) AS BIGINT) AS MaskedAttendingProvID,
+        CAST(ABS(CHECKSUM('ATTNM', S.Seed)) AS BIGINT) AS MaskedAttendingProvValue,
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('ATTNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedAttendingProvNPI,
+
+        CAST(ABS(CHECKSUM('ORDID', S.Seed)) AS BIGINT) AS MaskedOrderingProvID,
+        CAST(ABS(CHECKSUM('ORDNM', S.Seed)) AS BIGINT) AS MaskedOrderingProvValue,
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('ORDNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedOrderingProvNPI,
+
+        CAST(ABS(CHECKSUM('PCPID', S.Seed)) AS BIGINT) AS MaskedPCProvID,
+        CAST(ABS(CHECKSUM('PCPNM', S.Seed)) AS BIGINT) AS MaskedPCProvValue,
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('PCPNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedPCProvNPI,
+
+        CAST(ABS(CHECKSUM('VISID', S.Seed)) AS BIGINT) AS MaskedVisitProvID,
+        CAST(ABS(CHECKSUM('VISNM', S.Seed)) AS BIGINT) AS MaskedVisitProvValue,
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('VISNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedVisitProvNPI,
+
+        CAST(ABS(CHECKSUM('ADMID', S.Seed)) AS BIGINT) AS MaskedAdmissionProvID,
+        CAST(ABS(CHECKSUM('ADMN',  S.Seed)) AS BIGINT) AS MaskedAdmissionProvValue,
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('ADMNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedAdmissionProvNPI,
+
+        CAST(ABS(CHECKSUM('BATTID', S.Seed)) AS BIGINT) AS MaskedBillAttProvID,
+        CAST(ABS(CHECKSUM('BATTNM', S.Seed)) AS BIGINT) AS MaskedBillAttProvValue,
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('BATTNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedBillAttProvNPI,
+
+        CAST(ABS(CHECKSUM('DISID', S.Seed)) AS BIGINT) AS MaskedDischargeProvID,
+        CAST(ABS(CHECKSUM('DISNM', S.Seed)) AS BIGINT) AS MaskedDischargeProvValue,
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('DISNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedDischargeProvNPI,
+
+        CAST(ABS(CHECKSUM('FUPID', S.Seed)) AS BIGINT) AS MaskedFollowupProvID,
+        CAST(ABS(CHECKSUM('FUPNM', S.Seed)) AS BIGINT) AS MaskedFollowupProvValue,
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('FUPNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedFollowupProvNPI,
+
+        CAST(ABS(CHECKSUM('SURGID', S.Seed)) AS BIGINT) AS MaskedSurgeonProvID,
+        CAST(ABS(CHECKSUM('SURGNM', S.Seed)) AS BIGINT) AS MaskedSurgeonProvValue,
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('SURGNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedSurgeonProvNPI,
+
+        /* ---------- ACO Registry ---------- */
+        CAST(ABS(CHECKSUM('ACOID', S.Seed)) AS BIGINT) AS MaskedACORegID,
+        CAST(ABS(CHECKSUM('ACONM', S.Seed)) AS BIGINT) AS MaskedACORegName,
+
+        /* ---------- PCP fields on this table ---------- */
+        RIGHT('0000000000' + CAST(ABS(CHECKSUM('PCPHYSNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedPrimaryCarePhysNPI,
+        CAST(ABS(CHECKSUM('PATPCP', S.Seed)) AS BIGINT) AS MaskedPatientPCPValue
 ) AS M;
 GO
-+++++++++++++++++++Triggers==============================================
++++++++++++++++++++++++++++++Triggers++++++++++++++++++++++++++++++++++
+
 USE TERA;
 GO
 
-IF OBJECT_ID('S_cdpdynamics.trg_CDP_ENCOUNTERS_Masking', 'TR') IS NOT NULL
-    DROP TRIGGER S_cdpdynamics.trg_CDP_ENCOUNTERS_Masking;
+IF OBJECT_ID('S_cdpdynamics.trg_CDP_PAT_ENCOUNTERS_Masking', 'TR') IS NOT NULL
+    DROP TRIGGER S_cdpdynamics.trg_CDP_PAT_ENCOUNTERS_Masking;
 GO
 
-CREATE TRIGGER S_cdpdynamics.trg_CDP_ENCOUNTERS_Masking
-ON TERA.S_cdpdynamics.CDP_ENCOUNTERS
+CREATE TRIGGER S_cdpdynamics.trg_CDP_PAT_ENCOUNTERS_Masking
+ON TERA.S_cdpdynamics.CDP_PAT_ENCOUNTERS
 AFTER INSERT, UPDATE
 AS
 BEGIN
     SET NOCOUNT ON;
+    IF TRIGGER_NESTLEVEL() > 1 RETURN;
 
     ;WITH ToMask AS
     (
-        SELECT E.*
-        FROM TERA.S_cdpdynamics.CDP_ENCOUNTERS E
+        SELECT A.*
+        FROM TERA.S_cdpdynamics.CDP_PAT_ENCOUNTERS A
         INNER JOIN inserted i
-            ON E.EncounterId = i.EncounterId
+            ON A.EncounterId = i.EncounterId
     )
-    UPDATE E
+    UPDATE A
     SET
-        MRN                     = M.MaskedMRN,
-        -- EncounterId           = M.MaskedEncounterId,  -- optional
-        EncounterLine            = M.MaskedEncounterLine,
-        EncounterDate            = M.MaskedEncounterDate,
-        AdmissionDateTime        = M.MaskedAdmissionDateTime,
-        DischargeDateTime        = M.MaskedDischargeDateTime,
-        EpicEncountersCreatedOn  = M.MaskedEpicEncountersCreatedOn,
-        ReasonCode               = M.MaskedReasonCode,
-        VisitReason              = M.MaskedVisitReason,
-        SNOMEDCT                 = M.MaskedSNOMEDCT,     -- ✅ numeric token
-        DRG                      = M.MaskedDRG,
-        CPT                      = M.MaskedCPT,
-        [CPT Modifiers]          = M.MaskedCPTModifiers,
-        ICD10                    = M.MaskedICD10,
-        FinancialClass           = M.MaskedFinancialClass,
-        PrimaryHealthPlanName    = M.MaskedPrimaryHealthPlanName,
-        PrimaryMemberNumber      = M.MaskedPrimaryMemberNumber,
-        PrimaryGroupNumber       = M.MaskedPrimaryGroupNumber,
-        SecondaryHealthPlanName  = M.MaskedSecondaryHealthPlanName,
-        SecondaryMemberNumber    = M.MaskedSecondaryMemberNumber,
-        SecondaryGroupNumber     = M.MaskedSecondaryGroupNumber
-    FROM ToMask E
+        EncounterDate        = M.MaskedEncounterDate,
+        AdmissionDateTime    = M.MaskedAdmissionDT,
+        DischargeDateTime    = M.MaskedDischargeDT,
+        LastUpdated          = M.MaskedLastUpdated,
+        EpicEncountersCreatedOn = M.MaskedEpicEncCreatedOn,
+
+        VisitReason          = M.MaskedVisitReason,
+        ReasonCode           = M.MaskedReasonCode,
+
+        CPTHCPCS             = M.MaskedCPTHCPCS,
+        CPTModifiers         = M.MaskedCPTModifiers,
+        LOINC                = M.MaskedLOINC,
+        SNOMEDCT             = M.MaskedSNOMED,
+        ICD10                = M.MaskedICD10,
+        DRG                  = M.MaskedDRG,
+        [Vaccine Records]    = M.MaskedVaccineRecords,
+
+        PrimaryHealthPlanName    = M.MaskedPrimaryPlan,
+        SecondaryHealthPlanName  = M.MaskedSecondaryPlan,
+        Payer                    = M.MaskedPayer,
+
+        PrimaryMemberNumber      = M.MaskedPrimaryMember,
+        PrimaryGroupNumber       = M.MaskedPrimaryGroup,
+        SecondaryMemberNumber    = M.MaskedSecondaryMember,
+        SecondaryGroupNumber     = M.MaskedSecondaryGroup,
+
+        ApptProviderID      = M.MaskedApptProviderID,
+        ApptProvider        = M.MaskedApptProviderValue,
+        ApptProviderNPI     = M.MaskedApptProviderNPI,
+
+        EpicAppointmentsProviderName = M.MaskedEpicApptProvValue,
+
+        AttendingProviderID    = M.MaskedAttendingProvID,
+        AttendingProviderName  = M.MaskedAttendingProvValue,
+        AttendingProviderNPI   = M.MaskedAttendingProvNPI,
+
+        OrderingProviderID     = M.MaskedOrderingProvID,
+        OrderingProviderName   = M.MaskedOrderingProvValue,
+        OrderingProviderNPI    = M.MaskedOrderingProvNPI,
+
+        PrimaryCareProviderID   = M.MaskedPCProvID,
+        PrimaryCareProviderName = M.MaskedPCProvValue,
+        PrimaryCareProviderNPI  = M.MaskedPCProvNPI,
+
+        VisitProviderID         = M.MaskedVisitProvID,
+        VisitProviderName       = M.MaskedVisitProvValue,
+        VisitProviderNPI        = M.MaskedVisitProvNPI,
+
+        AdmissionProviderID     = M.MaskedAdmissionProvID,
+        AdmissionProviderName   = M.MaskedAdmissionProvValue,
+        AdmissionProviderNPI    = M.MaskedAdmissionProvNPI,
+
+        BillAttendingProviderID   = M.MaskedBillAttProvID,
+        BillAttendingProviderName = M.MaskedBillAttProvValue,
+        BillAttendingProviderNPI  = M.MaskedBillAttProvNPI,
+
+        DischargeProviderID     = M.MaskedDischargeProvID,
+        DischargeProviderName   = M.MaskedDischargeProvValue,
+        DischargeProviderNPI    = M.MaskedDischargeProvNPI,
+
+        [Follow-upProviderID]   = M.MaskedFollowupProvID,
+        [Follow-upProviderName] = M.MaskedFollowupProvValue,
+        [Follow-upProviderNPI]  = M.MaskedFollowupProvNPI,
+
+        SurgeonProviderID       = M.MaskedSurgeonProvID,
+        SurgeonProviderName     = M.MaskedSurgeonProvValue,
+        SurgeonProviderNPI      = M.MaskedSurgeonProvNPI,
+
+        ACORegistryID       = M.MaskedACORegID,
+        ACORegistryName     = M.MaskedACORegName,
+
+        PrimaryCarePhysicianNPI     = M.MaskedPrimaryCarePhysNPI,
+        PatientPrimaryCarePhysician = M.MaskedPatientPCPValue
+
+        -- NOTE: MRN NOT MASKED
+    FROM ToMask A
     CROSS APPLY
     (
-        SELECT ABS(CHECKSUM(E.EncounterId)) AS Seed
+        SELECT ABS(CHECKSUM(COALESCE(CONVERT(VARCHAR(100), A.EncounterId), A.MRN))) AS Seed
     ) AS S
     CROSS APPLY
     (
+        /* Reuse the EXACT same masking logic as static update */
         SELECT
-            CAST(ABS(CHECKSUM('MRN', S.Seed)) AS BIGINT)            AS MaskedMRN,
-            CAST(ABS(CHECKSUM('EncId', S.Seed)) AS BIGINT)          AS MaskedEncounterId,
-            CAST(ABS(CHECKSUM('EncLine', S.Seed)) AS BIGINT)        AS MaskedEncounterLine,
-            CAST(1000 + (S.Seed % 9000) AS INT)                     AS MaskedReasonCode,
-            CAST(2000 + (S.Seed % 9000) AS INT)                     AS MaskedDRG,
-            CAST(3000 + (S.Seed % 9000) AS INT)                     AS MaskedCPT,
-            CAST(4000 + (S.Seed % 9000) AS INT)                     AS MaskedCPTModifiers,
-            CAST(5000 + (S.Seed % 9000) AS INT)                     AS MaskedICD10,
+            DATEADD(DAY, (S.Seed % 365), ISNULL(CAST(A.EncounterDate AS DATETIME), CAST('2018-01-01' AS DATETIME))) AS MaskedEncounterDate,
+            DATEADD(DAY, (S.Seed % 365), ISNULL(CAST(A.AdmissionDateTime AS DATETIME), CAST('2018-01-01' AS DATETIME))) AS MaskedAdmissionDT,
+            DATEADD(DAY, (S.Seed % 365), ISNULL(CAST(A.DischargeDateTime AS DATETIME), CAST('2018-01-02' AS DATETIME))) AS MaskedDischargeDT,
+            DATEADD(DAY, (S.Seed % 365), ISNULL(CAST(A.LastUpdated AS DATETIME), CAST('2018-01-01' AS DATETIME))) AS MaskedLastUpdated,
+            DATEADD(DAY, (S.Seed % 365), ISNULL(CAST(A.EpicEncountersCreatedOn AS DATETIME), CAST('2018-01-01' AS DATETIME))) AS MaskedEpicEncCreatedOn,
 
-            -- ✅ FIXED SNOMEDCT => numeric
-            CAST(600000 + (S.Seed % 399999) AS INT)                 AS MaskedSNOMEDCT,
+            CAST(1000 + (S.Seed % 9000) AS INT) AS MaskedReasonCode,
+            'Visit reason (masked)'            AS MaskedVisitReason,
 
-            CAST(ABS(CHECKSUM('FinClass', S.Seed)) AS INT)          AS MaskedFinancialClass,
-            CAST(ABS(CHECKSUM('P-Mem', S.Seed)) AS BIGINT)          AS MaskedPrimaryMemberNumber,
-            CAST(ABS(CHECKSUM('P-Grp', S.Seed)) AS BIGINT)          AS MaskedPrimaryGroupNumber,
-            CAST(ABS(CHECKSUM('S-Mem', S.Seed)) AS BIGINT)          AS MaskedSecondaryMemberNumber,
-            CAST(ABS(CHECKSUM('S-Grp', S.Seed)) AS BIGINT)          AS MaskedSecondaryGroupNumber,
-            'General consultation (masked)'                         AS MaskedVisitReason,
-            'Health Plan A (masked)'                                AS MaskedPrimaryHealthPlanName,
-            'Health Plan B (masked)'                                AS MaskedSecondaryHealthPlanName,
-            DATEADD(DAY, (S.Seed % 365),
-                ISNULL(E.EncounterDate, CAST('2018-01-01' AS DATE))
-            ) AS MaskedEncounterDate,
-            DATEADD(DAY, (S.Seed % 365),
-                ISNULL(E.AdmissionDateTime, CAST('2018-01-01' AS DATETIME2))
-            ) AS MaskedAdmissionDateTime,
-            DATEADD(DAY, (S.Seed % 365),
-                ISNULL(E.DischargeDateTime, CAST('2018-01-02' AS DATETIME2))
-            ) AS MaskedDischargeDateTime,
-            DATEADD(DAY, (S.Seed % 365),
-                ISNULL(E.EpicEncountersCreatedOn, CAST('2018-01-01' AS DATETIME2))
-            ) AS MaskedEpicEncountersCreatedOn
+            '9921' + CAST((S.Seed % 10) AS VARCHAR(1)) AS MaskedCPTHCPCS,
+            CAST(ABS(CHECKSUM('CPTMOD', S.Seed)) AS BIGINT) AS MaskedCPTModifiers,
+            CAST(1000 + (S.Seed % 9000) AS VARCHAR(4)) + '-' + CAST((S.Seed % 9) + 1 AS VARCHAR(1)) AS MaskedLOINC,
+            CAST(ABS(CHECKSUM('SNOMED', S.Seed)) AS BIGINT) AS MaskedSNOMED,
+            CHAR(65 + (S.Seed % 26)) + RIGHT('0' + CAST((S.Seed % 99) AS VARCHAR(2)), 2) + '.' + RIGHT('000' + CAST((S.Seed % 999) AS VARCHAR(3)), 3) AS MaskedICD10,
+            RIGHT('000' + CAST((S.Seed % 999) AS VARCHAR(3)), 3) AS MaskedDRG,
+            'Vaccine records (masked)' AS MaskedVaccineRecords,
+
+            'Primary Plan (masked)'   AS MaskedPrimaryPlan,
+            'Secondary Plan (masked)' AS MaskedSecondaryPlan,
+            'Payer (masked)'          AS MaskedPayer,
+
+            CAST(ABS(CHECKSUM('PMEM', S.Seed)) AS BIGINT) AS MaskedPrimaryMember,
+            CAST(ABS(CHECKSUM('PGRP', S.Seed)) AS BIGINT) AS MaskedPrimaryGroup,
+            CAST(ABS(CHECKSUM('SMEM', S.Seed)) AS BIGINT) AS MaskedSecondaryMember,
+            CAST(ABS(CHECKSUM('SGRP', S.Seed)) AS BIGINT) AS MaskedSecondaryGroup,
+
+            CAST(ABS(CHECKSUM('APPTPID', S.Seed)) AS BIGINT) AS MaskedApptProviderID,
+            CAST(ABS(CHECKSUM('APPTP',   S.Seed)) AS BIGINT) AS MaskedApptProviderValue,
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('APPTNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedApptProviderNPI,
+
+            CAST(ABS(CHECKSUM('EAPPTPROV', S.Seed)) AS BIGINT) AS MaskedEpicApptProvValue,
+
+            CAST(ABS(CHECKSUM('ATTID', S.Seed)) AS BIGINT) AS MaskedAttendingProvID,
+            CAST(ABS(CHECKSUM('ATTNM', S.Seed)) AS BIGINT) AS MaskedAttendingProvValue,
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('ATTNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedAttendingProvNPI,
+
+            CAST(ABS(CHECKSUM('ORDID', S.Seed)) AS BIGINT) AS MaskedOrderingProvID,
+            CAST(ABS(CHECKSUM('ORDNM', S.Seed)) AS BIGINT) AS MaskedOrderingProvValue,
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('ORDNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedOrderingProvNPI,
+
+            CAST(ABS(CHECKSUM('PCPID', S.Seed)) AS BIGINT) AS MaskedPCProvID,
+            CAST(ABS(CHECKSUM('PCPNM', S.Seed)) AS BIGINT) AS MaskedPCProvValue,
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('PCPNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedPCProvNPI,
+
+            CAST(ABS(CHECKSUM('VISID', S.Seed)) AS BIGINT) AS MaskedVisitProvID,
+            CAST(ABS(CHECKSUM('VISNM', S.Seed)) AS BIGINT) AS MaskedVisitProvValue,
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('VISNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedVisitProvNPI,
+
+            CAST(ABS(CHECKSUM('ADMID', S.Seed)) AS BIGINT) AS MaskedAdmissionProvID,
+            CAST(ABS(CHECKSUM('ADMN',  S.Seed)) AS BIGINT) AS MaskedAdmissionProvValue,
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('ADMNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedAdmissionProvNPI,
+
+            CAST(ABS(CHECKSUM('BATTID', S.Seed)) AS BIGINT) AS MaskedBillAttProvID,
+            CAST(ABS(CHECKSUM('BATTNM', S.Seed)) AS BIGINT) AS MaskedBillAttProvValue,
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('BATTNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedBillAttProvNPI,
+
+            CAST(ABS(CHECKSUM('DISID', S.Seed)) AS BIGINT) AS MaskedDischargeProvID,
+            CAST(ABS(CHECKSUM('DISNM', S.Seed)) AS BIGINT) AS MaskedDischargeProvValue,
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('DISNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedDischargeProvNPI,
+
+            CAST(ABS(CHECKSUM('FUPID', S.Seed)) AS BIGINT) AS MaskedFollowupProvID,
+            CAST(ABS(CHECKSUM('FUPNM', S.Seed)) AS BIGINT) AS MaskedFollowupProvValue,
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('FUPNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedFollowupProvNPI,
+
+            CAST(ABS(CHECKSUM('SURGID', S.Seed)) AS BIGINT) AS MaskedSurgeonProvID,
+            CAST(ABS(CHECKSUM('SURGNM', S.Seed)) AS BIGINT) AS MaskedSurgeonProvValue,
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('SURGNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedSurgeonProvNPI,
+
+            CAST(ABS(CHECKSUM('ACOID', S.Seed)) AS BIGINT) AS MaskedACORegID,
+            CAST(ABS(CHECKSUM('ACONM', S.Seed)) AS BIGINT) AS MaskedACORegName,
+
+            RIGHT('0000000000' + CAST(ABS(CHECKSUM('PCPHYSNPI', S.Seed)) AS VARCHAR(20)), 10) AS MaskedPrimaryCarePhysNPI,
+            CAST(ABS(CHECKSUM('PATPCP', S.Seed)) AS BIGINT) AS MaskedPatientPCPValue
     ) AS M;
 END;
 GO
+
 
 
 ++++++++++++++++++++++++++++++++Appointment++++++++++++++++++++++++++++++++++++++++++
