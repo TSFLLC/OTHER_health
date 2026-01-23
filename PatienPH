@@ -1,0 +1,183 @@
+[PatId]
+      ,[PatMrnId]
+      ,[Patientlastname]
+      ,[Patientmiddlename]
+      ,[Patientfirstname]
+      ,[SexC]
+      ,[AddLine1]
+      ,[AddLine2]
+      ,[City]
+      ,[StateC]
+      ,[CountyC]
+      ,[Zip]
+      ,[HomePhone]
+      ,[WorkPhone]
+      ,[EmailAddress]
+      ,[LanguageC]
+      ,[ReligionC]
+      ,[MaritalStatusC]
+      ,[EthnicGroupC]
+      ,[BirthDate]
+      ,[Ssn]
+      ,[PatStatus]
+      ,[TmpAddrStartDt]
+      ,[TmpAddrEndDt]
+      ,[TmpAddrLine1]
+      ,[TmpAddrLine2]
+      ,[TmpCity]
+      ,[TmpStateC]
+      ,[TmpZip]
+      ,[PatNameSuffixC]
+      ,[MaidenName]
+      ,[PreferredName]
+      ,[GenderIdentityC]
+      ,[HearingImpairedC]
+      ,[CurPcpProvId]
+      ,[EmpyStatusC]
+      ,[RecCreateDate]
+      ,[UpdateDate]
+      ,[SourceId]
+  FROM [TERA].[B_epic].[Patient
+
+]--SELECT *
+--INTO [B_epic].[Patient_Backup_BeforeMasking]
+--FROM [B_epic].[Patient];
+--GO
+
+/* =========================================================
+   5. STATIC MASKING UPDATE (one-time)
+   ========================================================= */
+UPDATE p
+SET
+    -- If you want to also mask PAT_ID, uncomment this:
+    -- PAT_ID             = ABS(CHECKSUM(p.PAT_ID)) % 1000000000,
+
+    PAT_MRN_ID          = 'MRN' + RIGHT(CONVERT(varchar(20),
+                              ABS(CHECKSUM(p.PAT_MRN_ID, p.PAT_ID))), 8),
+
+    SSN                 = STUFF(
+                              STUFF(
+                                  RIGHT('000000000' + CAST(
+                                      ABS(CHECKSUM(p.SSN, p.PAT_ID)) % 1000000000 AS varchar(9)
+                                  ), 9),
+                              4, 0, '-'),
+                          7, 0, '-'),
+
+    PATIENTFIRSTNAME    = 'FN_' + RIGHT(CONVERT(varchar(20),
+                              ABS(CHECKSUM(p.PATIENTFIRSTNAME, p.PAT_ID))), 6),
+
+    PATIENTLASTNAME     = 'LN_' + RIGHT(CONVERT(varchar(20),
+                              ABS(CHECKSUM(p.PATIENTLASTNAME, p.PAT_ID))), 6),
+
+    DateofBirth          = CASE 
+                              WHEN p.DateofBirth IS NULL THEN NULL
+                              ELSE DATEADD(DAY,
+                                  ABS(CHECKSUM(p.BIRTH_DATE, p.PAT_ID)) % 3650,
+                                  '1950-01-01')
+                          END,
+
+    HOME_PHONE          = '(' +
+                          RIGHT('000' + CAST(ABS(CHECKSUM(p.HOME_PHONE, p.PAT_ID)) % 1000 AS varchar(3)), 3)
+                          + ') ' +
+                          RIGHT('000' + CAST(ABS(CHECKSUM(p.HOME_PHONE, p.PAT_ID, 1)) % 1000 AS varchar(3)), 3)
+                          + '-' +
+                          RIGHT('0000' + CAST(ABS(CHECKSUM(p.HOME_PHONE, p.PAT_ID, 2)) % 10000 AS varchar(4)), 4),
+
+    EMAIL_ADDRESS       = 'masked+' +
+                          RIGHT(CONVERT(varchar(20),
+                              ABS(CHECKSUM(p.EMAIL_ADDRESS, p.PAT_ID))), 8)
+                          + '@example.dev',
+
+    Address 1: Street 1          = 'Masked Address ' +
+                          RIGHT(CONVERT(varchar(10),
+                              ABS(CHECKSUM(p.Address 1: Street 1, p.PAT_ID))), 4),
+
+    CITY                = 'MaskedCity',
+
+    STATE_C             = 'MS',     -- generic state for masking
+
+    ZIP                 = RIGHT('00000' + CAST(
+                              ABS(CHECKSUM(p.ZIP, p.PAT_ID)) % 100000 AS varchar(5)
+                          ), 5)
+FROM [B_epic].[Patient] p;
+GO
+
+-- Check masked data
+--SELECT * FROM [B_epic].[Patient];
+--GO
+
+select Count(*) FROM [B_epic].[Patient];
+
+/* =========================================================
+   6. TRIGGER TO AUTO-MASK NEW / UPDATED ROWS
+   ========================================================= */
+IF OBJECT_ID('B_epic.trg_Patient_Mask_Dev', 'TR') IS NOT NULL
+    DROP TRIGGER B_epic.trg_Patient_Mask_Dev;
+GO
+
+CREATE TRIGGER [B_epic].[trg_Patient_Mask_Dev]
+ON [B_epic].[Patient]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Avoid infinite recursion
+    IF TRIGGER_NESTLEVEL() > 1 RETURN;
+
+    UPDATE p
+    SET
+        -- If you also want to change PAT_ID inside DEV, uncomment:
+        -- PAT_ID             = ABS(CHECKSUM(i.PAT_ID)) % 1000000000,
+
+        PAT_MRN_ID          = 'MRN' + RIGHT(CONVERT(varchar(20),
+                                  ABS(CHECKSUM(i.PAT_MRN_ID, i.PAT_ID))), 8),
+
+        SSN                 = STUFF(
+                                  STUFF(
+                                      RIGHT('000000000' + CAST(
+                                          ABS(CHECKSUM(i.SSN, i.PAT_ID)) % 1000000000 AS varchar(9)
+                                      ), 9),
+                                  4, 0, '-'),
+                              7, 0, '-'),[ARDENTHEALTH\mho5266-P]
+
+        PATIENTFIRSTNAME    = 'FN_' + RIGHT(CONVERT(varchar(20),
+                                  ABS(CHECKSUM(i.PATIENTFIRSTNAME, i.PAT_ID))), 6),
+
+        PATIENTLASTNAME     = 'LN_' + RIGHT(CONVERT(varchar(20),
+                                  ABS(CHECKSUM(i.PATIENTLASTNAME, i.PAT_ID))), 6),
+
+        BIRTH_DATE          = CASE 
+                                  WHEN i.BIRTH_DATE IS NULL THEN NULL
+                                  ELSE DATEADD(DAY,
+                                      ABS(CHECKSUM(i.BIRTH_DATE, i.PAT_ID)) % 3650,
+                                      '1950-01-01')
+                              END,
+
+        HOME_PHONE          = '(' +
+                              RIGHT('000' + CAST(ABS(CHECKSUM(i.HOME_PHONE, i.PAT_ID)) % 1000 AS varchar(3)), 3)
+                              + ') ' +
+                              RIGHT('000' + CAST(ABS(CHECKSUM(i.HOME_PHONE, i.PAT_ID, 1)) % 1000 AS varchar(3)), 3)
+                              + '-' +
+                              RIGHT('0000' + CAST(ABS(CHECKSUM(i.HOME_PHONE, i.PAT_ID, 2)) % 10000 AS varchar(4)), 4),
+
+        EMAIL_ADDRESS       = 'masked+' +
+                              RIGHT(CONVERT(varchar(20),
+                                  ABS(CHECKSUM(i.EMAIL_ADDRESS, i.PAT_ID))), 8)
+                              + '@example.dev',
+
+        ADD_LINE_1          = 'Masked Address ' +
+                              RIGHT(CONVERT(varchar(10),
+                                  ABS(CHECKSUM(i.ADD_LINE_1, i.PAT_ID))), 4),
+
+        CITY                = 'MaskedCity',
+        STATE_C             = 'MS',
+
+        ZIP                 = RIGHT('00000' + CAST(
+                                  ABS(CHECKSUM(i.ZIP, i.PAT_ID)) % 100000 AS varchar(5)
+                              ), 5)
+    FROM [B_epic].[Patient] p
+    JOIN inserted i
+        ON p.PAT_ID = i.PAT_ID;
+END;
+GO
